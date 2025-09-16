@@ -3,7 +3,6 @@
 
 [![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/orca-zhang/borm/blob/master/LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/orca-zhang/borm)](https://goreportcard.com/report/github.com/orca-zhang/borm)
-[![Build Status](https://orca-zhang.semaphoreci.com/badges/borm.svg?style=shields)](https://orca-zhang.semaphoreci.com/projects/borm)
 [![codecov](https://codecov.io/gh/orca-zhang/borm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/borm)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Forca-zhang%2Fborm.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Forca-zhang%2Fborm?ref=badge_shield)
 
@@ -124,10 +123,11 @@
    </tr>
    <tr>
       <td>Map类型支持</td>
+      <td>直接使用map操作数据库</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>无需定义struct，直接使用map操作数据库</td>
+      <td>无需定义struct</td>
    </tr>
    <tr>
       <td>可测试性</td>
