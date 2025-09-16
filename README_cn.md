@@ -8,7 +8,7 @@
 
 🏎️ Better ORM library (Better ORM library that is simple, fast and self-mockable for Go)
 
-[English](README_en.md) | [中文](README.md)
+[English](README.md) | [中文](README_cn.md)
 
 # 🚀 Latest Features
 
