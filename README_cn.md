@@ -6,7 +6,7 @@
 [![codecov](https://codecov.io/gh/orca-zhang/borm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/borm)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Forca-zhang%2Fborm.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Forca-zhang%2Fborm?ref=badge_shield)
 
-🏎️ 更好的ORM库 (Better ORM library that is simple, fast and self-mockable for Go)
+🏎️ 用Go开发的简单、超快、可自测试的Zima ORM
 
 [English](README_en.md) | [中文](README.md)
 
