@@ -87,6 +87,16 @@ func Table(db ZormDBIFace, name string, ctx ...context.Context) *ZormTable {
 	}
 }
 
+// TableContext 创建带Context的Table，参数顺序：context, db, name
+func TableContext(ctx context.Context, db ZormDBIFace, name string) *ZormTable {
+	return &ZormTable{
+		DB:   db,
+		Name: name,
+		ctx:  ctx,
+		Cfg:  Config{Reuse: true}, // 默认开启Reuse（内建形状感知）
+	}
+}
+
 // Reuse .
 func (t *ZormTable) Reuse() *ZormTable {
 	t.Cfg.Reuse = true
@@ -1466,8 +1476,7 @@ func (w *joinItem) BuildSQL(sb *strings.Builder) {
 	sb.WriteString(w.Stmt)
 }
 
-func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {
-}
+func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {}
 
 type indexedByItem struct {
 	idx string
@@ -1481,9 +1490,7 @@ func (w *indexedByItem) BuildSQL(sb *strings.Builder) {
 	sb.WriteString(" indexed by " + w.idx)
 }
 
-func (w *indexedByItem) BuildArgs(stmtArgs *[]interface{}) {
-	return
-}
+func (w *indexedByItem) BuildArgs(stmtArgs *[]interface{}) {}
 
 type whereItem struct {
 	Conds []interface{}
@@ -2249,7 +2256,6 @@ func ZormMock(tbl, fun, caller, file, pkg string, data interface{}, ret int, err
 		Ret:    ret,
 		Err:    err,
 	})
-	return
 }
 
 // ZormMockFinish .
@@ -2295,31 +2301,6 @@ func getCallSite() *CallSite {
 	}
 	_callSiteCache.Store(callerPC, callSite)
 	return callSite
-}
-
-func storeToCache(file string, line int, item *DataBindingItem) {
-	key := buildCacheKey(file, line)
-	_dataBindingCache.Store(key, item)
-}
-
-func loadFromCache(file string, line int) *DataBindingItem {
-	key := buildCacheKey(file, line)
-	if i, ok := _dataBindingCache.Load(key); ok {
-		return i.(*DataBindingItem)
-	}
-	return nil
-}
-
-// 优化版本：使用预缓存的调用位置
-func storeToCacheOptimized(callSite *CallSite, item *DataBindingItem) {
-	_dataBindingCache.Store(callSite.Key, item)
-}
-
-func loadFromCacheOptimized(callSite *CallSite) *DataBindingItem {
-	if i, ok := _dataBindingCache.Load(callSite.Key); ok {
-		return i.(*DataBindingItem)
-	}
-	return nil
 }
 
 var (
