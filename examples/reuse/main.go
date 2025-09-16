@@ -5,15 +5,14 @@ import (
 	"fmt"
 	"log"
 
-	"borm"
-
+	"github.com/IceWhaleTech/zorm"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type User struct {
-	ID   int    `borm:"id"`
-	Name string `borm:"name"`
-	Age  int    `borm:"age"`
+	ID   int    `zorm:"id"`
+	Name string `zorm:"name"`
+	Age  int    `zorm:"age"`
 }
 
 func main() {
@@ -36,7 +35,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	table := borm.Table(db, "users").Debug()
+	table := zorm.Table(db, "users").Debug()
 
 	// 测试Insert with Reuse
 	fmt.Println("=== 测试Insert with Reuse ===")
@@ -57,7 +56,7 @@ func main() {
 	// 测试Update with Reuse
 	fmt.Println("\n=== 测试Update with Reuse ===")
 	user1.Age = 26
-	count, err = table.Update(user1, borm.Where(borm.Eq("id", user1.ID)))
+	count, err = table.Update(user1, zorm.Where(zorm.Eq("id", user1.ID)))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,7 +64,7 @@ func main() {
 
 	// 测试Delete with Reuse
 	fmt.Println("\n=== 测试Delete with Reuse ===")
-	count, err = table.Delete(borm.Where(borm.Eq("id", user2.ID)))
+	count, err = table.Delete(zorm.Where(zorm.Eq("id", user2.ID)))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,7 +73,7 @@ func main() {
 	// 验证结果
 	fmt.Println("\n=== 验证结果 ===")
 	var users []User
-	count, err = table.Select(&users, borm.Fields("id", "name", "age"))
+	count, err = table.Select(&users, zorm.Fields("id", "name", "age"))
 	if err != nil {
 		log.Fatal(err)
 	}

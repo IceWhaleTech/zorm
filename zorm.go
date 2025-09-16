@@ -1,13 +1,13 @@
 /*
-   borm is a better orm library for Go.
+   zorm is a better orm library for Go.
 
   Copyright (c) 2019 <http://ez8.co> <orca.zhang@yahoo.com>
 
   This library is released under the MIT License.
-  Please see LICENSE file or visit https://github.com/orca-zhang/borm for details.
+  Please see LICENSE file or visit https://github.com/IceWhaleTech/zorm for details.
 */
 
-package borm
+package zorm
 
 import (
 	"context"
@@ -70,16 +70,16 @@ type Config struct {
 }
 
 // Table .
-func Table(db BormDBIFace, name string, ctx ...context.Context) *BormTable {
+func Table(db ZormDBIFace, name string, ctx ...context.Context) *ZormTable {
 	if len(ctx) > 0 {
-		return &BormTable{
+		return &ZormTable{
 			DB:   db,
 			Name: name,
 			ctx:  ctx[0],
 			Cfg:  Config{Reuse: true}, // 默认开启Reuse（内建形状感知）
 		}
 	}
-	return &BormTable{
+	return &ZormTable{
 		DB:   db,
 		Name: name,
 		ctx:  context.Background(),
@@ -88,43 +88,43 @@ func Table(db BormDBIFace, name string, ctx ...context.Context) *BormTable {
 }
 
 // Reuse .
-func (t *BormTable) Reuse() *BormTable {
+func (t *ZormTable) Reuse() *ZormTable {
 	t.Cfg.Reuse = true
 	return t
 }
 
 // NoReuse 关闭Reuse功能（如果不需要缓存优化）
-func (t *BormTable) NoReuse() *BormTable {
+func (t *ZormTable) NoReuse() *ZormTable {
 	t.Cfg.Reuse = false
 	return t
 }
 
 // Debug .
-func (t *BormTable) Debug() *BormTable {
+func (t *ZormTable) Debug() *ZormTable {
 	t.Cfg.Debug = true
 	return t
 }
 
 // UseNameWhenTagEmpty .
-func (t *BormTable) UseNameWhenTagEmpty() *BormTable {
+func (t *ZormTable) UseNameWhenTagEmpty() *ZormTable {
 	t.Cfg.UseNameWhenTagEmpty = true
 	return t
 }
 
 // ToTimestamp .
-func (t *BormTable) ToTimestamp() *BormTable {
+func (t *ZormTable) ToTimestamp() *ZormTable {
 	t.Cfg.ToTimestamp = true
 	return t
 }
 
 // SafeReuse 已合并进 Reuse，保持兼容
-func (t *BormTable) SafeReuse() *BormTable { return t.Reuse() }
+func (t *ZormTable) SafeReuse() *ZormTable { return t.Reuse() }
 
 // NoSafeReuse 已合并进 Reuse，保持兼容
-func (t *BormTable) NoSafeReuse() *BormTable { return t }
+func (t *ZormTable) NoSafeReuse() *ZormTable { return t }
 
 // buildShapeKey 基于调用点key和参数形状构建复用key
-func buildShapeKey(baseKey string, op string, args []BormItem) string {
+func buildShapeKey(baseKey string, op string, args []ZormItem) string {
 	var b strings.Builder
 	b.WriteString(baseKey)
 	b.WriteString("|")
@@ -259,7 +259,7 @@ func IndexedBy(idx string) *indexedByItem {
 }
 
 // Select .
-func (t *BormTable) Select(res interface{}, args ...BormItem) (int, error) {
+func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 	if len(args) <= 0 {
 		return 0, errors.New("argument 2 cannot be omitted")
 	}
@@ -361,7 +361,7 @@ func (t *BormTable) Select(res interface{}, args ...BormItem) (int, error) {
 			} else {
 				for i := 0; i < s.NumField(); i++ {
 					f := s.Field(i)
-					ft := f.Tag().Get("borm")
+					ft := f.Tag().Get("zorm")
 
 					if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
 						continue
@@ -541,7 +541,7 @@ func (t *BormTable) Select(res interface{}, args ...BormItem) (int, error) {
 }
 
 // InsertIgnore .
-func (t *BormTable) InsertIgnore(objs interface{}, args ...BormItem) (int, error) {
+func (t *ZormTable) InsertIgnore(objs interface{}, args ...ZormItem) (int, error) {
 	if config.Mock {
 		pc, fileName, _, _ := runtime.Caller(1)
 		if ok, _, n, e := checkMock(t.Name, "InsertIgnore", runtime.FuncForPC(pc).Name(), fileName, path.Dir(fileName)); ok {
@@ -553,7 +553,7 @@ func (t *BormTable) InsertIgnore(objs interface{}, args ...BormItem) (int, error
 }
 
 // ReplaceInto .
-func (t *BormTable) ReplaceInto(objs interface{}, args ...BormItem) (int, error) {
+func (t *ZormTable) ReplaceInto(objs interface{}, args ...ZormItem) (int, error) {
 	if config.Mock {
 		pc, fileName, _, _ := runtime.Caller(1)
 		if ok, _, n, e := checkMock(t.Name, "ReplaceInto", runtime.FuncForPC(pc).Name(), fileName, path.Dir(fileName)); ok {
@@ -565,7 +565,7 @@ func (t *BormTable) ReplaceInto(objs interface{}, args ...BormItem) (int, error)
 }
 
 // Insert .
-func (t *BormTable) Insert(objs interface{}, args ...BormItem) (int, error) {
+func (t *ZormTable) Insert(objs interface{}, args ...ZormItem) (int, error) {
 	if config.Mock {
 		pc, fileName, _, _ := runtime.Caller(1)
 		if ok, _, n, e := checkMock(t.Name, "Insert", runtime.FuncForPC(pc).Name(), fileName, path.Dir(fileName)); ok {
@@ -576,7 +576,7 @@ func (t *BormTable) Insert(objs interface{}, args ...BormItem) (int, error) {
 	return t.insert("insert into ", objs, args)
 }
 
-func (t *BormTable) insert(prefix string, objs interface{}, args []BormItem) (int, error) {
+func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (int, error) {
 	var (
 		rt         = reflect2.TypeOf(objs)
 		isArray    bool
@@ -792,7 +792,7 @@ func (t *BormTable) insert(prefix string, objs interface{}, args []BormItem) (in
 
 	if !isArray && rtElem.Kind() == reflect.Struct {
 		s := rtElem.(reflect2.StructType)
-		if f := s.FieldByName("BormLastId"); f != nil {
+		if f := s.FieldByName("ZormLastId"); f != nil {
 			id, _ := res.LastInsertId()
 			f.UnsafeSet(reflect2.PtrOf(objs), reflect2.PtrOf(id))
 		}
@@ -803,7 +803,7 @@ func (t *BormTable) insert(prefix string, objs interface{}, args []BormItem) (in
 }
 
 // Update .
-func (t *BormTable) Update(obj interface{}, args ...BormItem) (int, error) {
+func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 	if config.Mock {
 		pc, fileName, _, _ := runtime.Caller(1)
 		if ok, _, n, e := checkMock(t.Name, "Update", runtime.FuncForPC(pc).Name(), fileName, path.Dir(fileName)); ok {
@@ -953,7 +953,7 @@ func (t *BormTable) Update(obj interface{}, args ...BormItem) (int, error) {
 					argCnt := 0
 					for i := 0; i < s.NumField(); i++ {
 						f := s.Field(i)
-						ft := f.Tag().Get("borm")
+						ft := f.Tag().Get("zorm")
 						if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
 							continue
 						}
@@ -984,7 +984,7 @@ func (t *BormTable) Update(obj interface{}, args ...BormItem) (int, error) {
 					idx := 0
 					for i := 0; i < s.NumField(); i++ {
 						f := s.Field(i)
-						ft := f.Tag().Get("borm")
+						ft := f.Tag().Get("zorm")
 						if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
 							continue
 						}
@@ -1034,7 +1034,7 @@ func (t *BormTable) Update(obj interface{}, args ...BormItem) (int, error) {
 }
 
 // Delete .
-func (t *BormTable) Delete(args ...BormItem) (int, error) {
+func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 	if len(args) <= 0 {
 		return 0, errors.New("argument 1 cannot be omitted")
 	}
@@ -1102,7 +1102,7 @@ func (t *BormTable) Delete(args ...BormItem) (int, error) {
 	return int(row), nil
 }
 
-func (t *BormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
+func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
 	for _, col := range cols {
 		var v interface{}
 		if ptr {
@@ -1124,16 +1124,16 @@ func (t *BormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructFie
 	}
 }
 
-// BormDBIFace .
-type BormDBIFace interface {
+// ZormDBIFace .
+type ZormDBIFace interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
-// BormTable .
-type BormTable struct {
-	DB   BormDBIFace
+// ZormTable .
+type ZormTable struct {
+	DB   ZormDBIFace
 	Name string
 	Cfg  Config
 	ctx  context.Context
@@ -1155,7 +1155,7 @@ func fieldEscape(sb *strings.Builder, field string) {
 	}
 }
 
-func (t *BormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2.StructField {
+func (t *ZormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2.StructField {
 	// 使用结构体类型作为缓存key
 	typeKey := s.String()
 
@@ -1174,12 +1174,12 @@ func (t *BormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2
 }
 
 // collectStructFields 递归收集结构体字段，支持embedded struct
-func (t *BormTable) collectStructFields(s reflect2.StructType, m map[string]reflect2.StructField, prefix string) {
+func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]reflect2.StructField, prefix string) {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
-		ft := f.Tag().Get("borm")
+		ft := f.Tag().Get("zorm")
 
-		// 忽略borm tag为"-"的字段
+		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
 			continue
 		}
@@ -1206,17 +1206,17 @@ func (t *BormTable) collectStructFields(s reflect2.StructType, m map[string]refl
 }
 
 // collectFieldsForInsert 收集字段用于INSERT操作，支持embedded struct
-func (t *BormTable) collectFieldsForInsert(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField) {
+func (t *ZormTable) collectFieldsForInsert(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField) {
 	t.collectFieldsForInsertWithPrefix(s, sb, cols, "")
 }
 
 // collectFieldsForInsertWithPrefix 递归收集字段，支持embedded struct和前缀
-func (t *BormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField, prefix string) {
+func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField, prefix string) {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
-		ft := f.Tag().Get("borm")
+		ft := f.Tag().Get("zorm")
 
-		// 忽略borm tag为"-"的字段
+		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
 			continue
 		}
@@ -1254,7 +1254,7 @@ func (t *BormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *
 }
 
 // collectFieldsGeneric 通用字段收集函数，支持struct和map
-func (t *BormTable) collectFieldsGeneric(objs interface{}, rt reflect2.Type, sb *strings.Builder, fieldInfos *[]FieldInfo) error {
+func (t *ZormTable) collectFieldsGeneric(objs interface{}, rt reflect2.Type, sb *strings.Builder, fieldInfos *[]FieldInfo) error {
 	switch rt.Kind() {
 	case reflect.Struct:
 		return t.collectStructFieldsGeneric(rt.(reflect2.StructType), sb, fieldInfos, "")
@@ -1266,12 +1266,12 @@ func (t *BormTable) collectFieldsGeneric(objs interface{}, rt reflect2.Type, sb 
 }
 
 // collectStructFieldsGeneric 收集struct字段，返回通用FieldInfo
-func (t *BormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *strings.Builder, fieldInfos *[]FieldInfo, prefix string) error {
+func (t *ZormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *strings.Builder, fieldInfos *[]FieldInfo, prefix string) error {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
-		ft := f.Tag().Get("borm")
+		ft := f.Tag().Get("zorm")
 
-		// 忽略borm tag为"-"的字段
+		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
 			continue
 		}
@@ -1312,7 +1312,7 @@ func (t *BormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *string
 }
 
 // collectMapFieldsGeneric 收集map字段，返回通用FieldInfo
-func (t *BormTable) collectMapFieldsGeneric(objs interface{}, mapType reflect2.MapType, sb *strings.Builder, fieldInfos *[]FieldInfo) error {
+func (t *ZormTable) collectMapFieldsGeneric(objs interface{}, mapType reflect2.MapType, sb *strings.Builder, fieldInfos *[]FieldInfo) error {
 	// 检查key类型
 	keyType := mapType.Key()
 	if keyType.Kind() != reflect.String {
@@ -1409,8 +1409,8 @@ func (f *MapFieldInfo) GetType() reflect2.Type {
 	return f.valueType
 }
 
-// BormItem .
-type BormItem interface {
+// ZormItem .
+type ZormItem interface {
 	Type() int
 	BuildSQL(*strings.Builder)
 	BuildArgs(*[]interface{})
@@ -2229,8 +2229,8 @@ func checkInTestFile(fileName string) {
 	}
 }
 
-// BormMock .
-func BormMock(tbl, fun, caller, file, pkg string, data interface{}, ret int, err error) {
+// ZormMock .
+func ZormMock(tbl, fun, caller, file, pkg string, data interface{}, ret int, err error) {
 	_, fileName, _, _ := runtime.Caller(1)
 	checkInTestFile(fileName)
 
@@ -2252,8 +2252,8 @@ func BormMock(tbl, fun, caller, file, pkg string, data interface{}, ret int, err
 	return
 }
 
-// BormMockFinish .
-func BormMockFinish() error {
+// ZormMockFinish .
+func ZormMockFinish() error {
 	_mutex.Lock()
 	defer _mutex.Unlock()
 

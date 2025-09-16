@@ -1,4 +1,4 @@
-package borm_test
+package zorm_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	b "borm"
+	"github.com/IceWhaleTech/zorm"
 )
 
 // noop DB impl for Exec-only benchmarks
@@ -30,18 +30,18 @@ func (benchDB) ExecContext(ctx context.Context, query string, args ...interface{
 }
 
 type benchUser struct {
-	ID   int64  `borm:"id"`
-	Name string `borm:"name"`
-	Age  int    `borm:"age"`
+	ID   int64  `zorm:"id"`
+	Name string `zorm:"name"`
+	Age  int    `zorm:"age"`
 }
 
 // shape: constant; default Reuse
 func BenchmarkUpdate_Reuse_Default(bm *testing.B) {
 	bm.ReportAllocs()
 	db := benchDB{}
-	t := b.Table(db, "users")
+	t := zorm.Table(db, "users")
 	u := benchUser{ID: 1, Name: "alice", Age: 20}
-	where := b.Where(b.Eq("id", u.ID))
+	where := zorm.Where(zorm.Eq("id", u.ID))
 
 	// warm-up to populate cache
 	_, _ = t.Update(&u, where)
@@ -58,10 +58,10 @@ func BenchmarkUpdate_Reuse_Default(bm *testing.B) {
 func BenchmarkUpdate_Reuse_SameShape(bm *testing.B) {
 	bm.ReportAllocs()
 	db := benchDB{}
-	t := b.Table(db, "users")
+	t := zorm.Table(db, "users")
 	u := benchUser{ID: 1, Name: "alice", Age: 20}
-	where := b.Where(b.Eq("id", u.ID))
-	fields := b.Fields("name", "age")
+	where := zorm.Where(zorm.Eq("id", u.ID))
+	fields := zorm.Fields("name", "age")
 
 	// warm-up
 	_, _ = t.Update(&u, fields, where)
@@ -78,11 +78,11 @@ func BenchmarkUpdate_Reuse_SameShape(bm *testing.B) {
 func BenchmarkUpdate_Reuse_ShapeChanges(bm *testing.B) {
 	bm.ReportAllocs()
 	db := benchDB{}
-	t := b.Table(db, "users")
+	t := zorm.Table(db, "users")
 	u := benchUser{ID: 1, Name: "alice", Age: 20}
-	where := b.Where(b.Eq("id", u.ID))
-	fieldsA := b.Fields("name")
-	fieldsB := b.Fields("name", "age")
+	where := zorm.Where(zorm.Eq("id", u.ID))
+	fieldsA := zorm.Fields("name")
+	fieldsB := zorm.Fields("name", "age")
 
 	// warm-up both shapes
 	_, _ = t.Update(&u, fieldsA, where)

@@ -1,14 +1,14 @@
-
 # zorm
 
-[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/orca-zhang/zorm/blob/master/LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/orca-zhang/zorm)](https://goreportcard.com/report/github.com/orca-zhang/zorm)
+[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/IceWhaleTech/zorm/blob/master/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/zorm)](https://goreportcard.com/report/github.com/IceWhaleTech/zorm)
+[![Build Status](https://orca-zhang.semaphoreci.com/badges/zorm.svg?style=shields)](https://orca-zhang.semaphoreci.com/projects/zorm)
 [![codecov](https://codecov.io/gh/orca-zhang/zorm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/zorm)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Forca-zhang%2Fzorm.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Forca-zhang%2Fzorm?ref=badge_shield)
 
-🏎️ Zima ORM library that is simple, ultra-fast and self-mockable for Go
+🏎️ Better ORM library (Better ORM library that is simple, fast and self-mockable for Go)
 
-[English](README.md) | [中文](README_cn.md)
+[English](README_en.md) | [中文](README.md)
 
 # 🚀 Latest Features
 
@@ -66,7 +66,7 @@
 <table style="text-align: center">
    <tr>
       <td colspan="2">Library</td>
-      <td><a href="https://github.com/orca-zhang/zorm">zorm <strong>(me)</strong></a></td>
+      <td><a href="https://github.com/IceWhaleTech/zorm">zorm <strong>(me)</strong></a></td>
       <td><a href="https://github.com/jinzhu/gorm">gorm</a></td>
       <td><a href="https://github.com/go-xorm/xorm">xorm</a></td>
       <td>Notes</td>
@@ -123,11 +123,10 @@
    </tr>
    <tr>
       <td>Map type support</td>
-      <td>Operate database with map</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>Without defining struct</td>
+      <td>Operate database with map without defining struct</td>
    </tr>
    <tr>
       <td>Testability</td>
@@ -170,9 +169,9 @@
 
 2. Define Table object
    ``` golang
-   t := z.Table(d.DB, "t_usr")
+   t := b.Table(d.DB, "t_usr")
 
-   t1 := z.Table(d.DB, "t_usr", ctx)
+   t1 := b.Table(d.DB, "t_usr", ctx)
    ```
 
 - `d.DB` is a database connection object that supports Exec/Query/QueryRow
@@ -206,13 +205,13 @@
    n, err = t.ReplaceInto(&o)
 
    // Insert only partial fields (others use defaults)
-   n, err = t.Insert(&o, z.Fields("name", "tag"))
+   n, err = t.Insert(&o, b.Fields("name", "tag"))
 
    // Resolve primary key conflicts
-   n, err = t.Insert(&o, z.Fields("name", "tag"),
-      z.OnConflictDoUpdateSet([]string{"id"}, z.V{
+   n, err = t.Insert(&o, b.Fields("name", "tag"),
+      b.OnConflictDoUpdateSet([]string{"id"}, b.V{
          "name": "new_name",
-         "age":  z.U("age+1"), // Use z.U to handle non-variable updates
+         "age":  b.U("age+1"), // Use b.U to handle non-variable updates
       }))
 
    // Use map insert (no need to define struct)
@@ -247,54 +246,54 @@
    ``` golang
    // o can be object/slice/ptr slice
    n, err := t.Select(&o,
-      z.Where("name = ?", name),
-      z.GroupBy("id"),
-      z.Having(z.Gt("id", 0)),
-      z.OrderBy("id", "name"),
-      z.Limit(1))
+      b.Where("name = ?", name),
+      b.GroupBy("id"),
+      b.Having(b.Gt("id", 0)),
+      b.OrderBy("id", "name"),
+      b.Limit(1))
 
    // Use basic type + Fields to get count (n value is 1, because result has only 1 row)
    var cnt int64
-   n, err = t.Select(&cnt, z.Fields("count(1)"), z.Where("name = ?", name))
+   n, err = t.Select(&cnt, b.Fields("count(1)"), b.Where("name = ?", name))
 
    // Also support arrays
    var ids []int64
-   n, err = t.Select(&ids, z.Fields("id"), z.Where("name = ?", name))
+   n, err = t.Select(&ids, b.Fields("id"), b.Where("name = ?", name))
 
    // Can force index
-   n, err = t.Select(&ids, z.Fields("id"), z.IndexedBy("idx_xxx"), z.Where("name = ?", name))
+   n, err = t.Select(&ids, b.Fields("id"), b.IndexedBy("idx_xxx"), b.Where("name = ?", name))
    ```
 
 - Select to Map (no struct needed)
   ``` golang
   // single row to map
   var m map[string]interface{}
-  n, err := t.Select(&m, z.Fields("id", "name", "age"), z.Where(z.Eq("id", 1)))
+  n, err := t.Select(&m, b.Fields("id", "name", "age"), b.Where(b.Eq("id", 1)))
 
   // multiple rows to []map
   var ms []map[string]interface{}
-  n, err = t.Select(&ms, z.Fields("id", "name", "age"), z.Where(z.Gt("age", 18)))
+  n, err = t.Select(&ms, b.Fields("id", "name", "age"), b.Where(b.Gt("age", 18)))
   ```
 
 - Update
    ``` golang
    // o can be object/slice/ptr slice
-   n, err = t.Update(&o, z.Where(z.Eq("id", id)))
+   n, err = t.Update(&o, b.Where(b.Eq("id", id)))
 
    // Use map update
-   n, err = t.Update(z.V{
+   n, err = t.Update(b.V{
          "name": "new_name",
          "tag":  "tag1,tag2,tag3",
-         "age":  z.U("age+1"), // Use z.U to handle non-variable updates
-      }, z.Where(z.Eq("id", id)))
+         "age":  b.U("age+1"), // Use b.U to handle non-variable updates
+      }, b.Where(b.Eq("id", id)))
 
    // Use map update partial fields
-   n, err = t.Update(z.V{
+   n, err = t.Update(b.V{
          "name": "new_name",
          "tag":  "tag1,tag2,tag3",
-      }, z.Fields("name"), z.Where(z.Eq("id", id)))
+      }, b.Fields("name"), b.Where(b.Eq("id", id)))
 
-   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
+   n, err = t.Update(&o, b.Fields("name"), b.Where(b.Eq("id", id)))
    ```
 
 - CRUD with Reuse (enabled by default)
@@ -303,7 +302,7 @@
   // Update example
   type User struct { ID int64 `zorm:"id"`; Name string `zorm:"name"`; Age int `zorm:"age"` }
   for _, u := range users {
-      _, _ = t.Update(&u, z.Fields("name", "age"), z.Where(z.Eq("id", u.ID)))
+      _, _ = t.Update(&u, b.Fields("name", "age"), b.Where(b.Eq("id", u.ID)))
   }
 
   // Insert example
@@ -315,21 +314,21 @@
 - Delete
    ``` golang
    // Delete by condition
-   n, err = t.Delete(z.Where("name = ?", name))
-   n, err = t.Delete(z.Where(z.Eq("id", id)))
+   n, err = t.Delete(b.Where("name = ?", name))
+   n, err = t.Delete(b.Where(b.Eq("id", id)))
    ```
 
 - **Variable conditions**
    ``` golang
-   conds := []interface{}{z.Cond("1=1")} // prevent empty where condition
+   conds := []interface{}{b.Cond("1=1")} // prevent empty where condition
    if name != "" {
-      conds = append(conds, z.Eq("name", name))
+      conds = append(conds, b.Eq("name", name))
    }
    if id > 0 {
-      conds = append(conds, z.Eq("id", id))
+      conds = append(conds, b.Eq("id", id))
    }
    // Execute query operation
-   n, err := t.Select(&o, z.Where(conds...))
+   n, err := t.Select(&o, b.Where(conds...))
    ```
 
 - **Join queries**
@@ -341,13 +340,13 @@
    }
 
    // Method 1
-   t := z.Table(d.DB, "t_usr join t_tag on t_usr.id=t_tag.id") // table name with join statement
+   t := b.Table(d.DB, "t_usr join t_tag on t_usr.id=t_tag.id") // table name with join statement
    var o Info
-   n, err := t.Select(&o, z.Where(z.Eq("t_usr.id", id))) // condition with table name
+   n, err := t.Select(&o, b.Where(b.Eq("t_usr.id", id))) // condition with table name
 
    // Method 2
-   t = z.Table(d.DB, "t_usr") // normal table name
-   n, err = t.Select(&o, z.Join("join t_tag on t_usr.id=t_tag.id"), z.Where(z.Eq("t_usr.id", id))) // condition needs table name
+   t = b.Table(d.DB, "t_usr") // normal table name
+   n, err = t.Select(&o, b.Join("join t_tag on t_usr.id=t_tag.id"), b.Where(b.Eq("t_usr.id", id))) // condition needs table name
    ```
 
 - Get inserted auto-increment id
@@ -422,12 +421,12 @@
 - Currently using other ORM frameworks (new interfaces can be switched first)
    ``` golang
    // [gorm] db is a *gorm.DB
-   t := z.Table(db.DB(), "tbl")
+   t := b.Table(db.DB(), "tbl")
 
    // [xorm] db is a *xorm.EngineGroup
-   t := z.Table(db.Master().DB().DB, "tbl")
+   t := b.Table(db.Master().DB().DB, "tbl")
    // or
-   t := z.Table(db.Slave().DB().DB, "tbl")
+   t := b.Table(db.Slave().DB().DB, "tbl")
    ```
 
 # Other Details
@@ -453,7 +452,7 @@ Option usage example:
    n, err = t.NoReuse().Insert(&o)
 
    // Reuse is shape-aware by default: guards against SQL shape changes at the same call-site
-   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
+   n, err = t.Update(&o, b.Fields("name"), b.Where(b.Eq("id", id)))
    ```
 
 ### Where
@@ -576,8 +575,8 @@ Function to test:
 
    func test(db *sql.DB) (X, int, error) {
       var o X
-      tbl := z.Table(db, "tbl")
-      n, err := tbl.Select(&o, z.Where("`id` >= ?", 1), z.Limit(100))
+      tbl := b.Table(db, "tbl")
+      n, err := tbl.Select(&o, b.Where("`id` >= ?", 1), b.Limit(100))
       return o, n, err
    }
 ```
@@ -587,7 +586,7 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 ``` golang
    // Must set mock in _test.go file
    // Note caller method name needs to include package name
-   z.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
+   b.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
 
    // Call the function under test
    o1, n1, err := test(db)
@@ -597,7 +596,7 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
    So(o1, ShouldResemble, o)
 
    // Check if all hits
-   err = z.ZormMockFinish()
+   err = b.ZormMockFinish()
    So(err, ShouldBeNil)
 ```
 

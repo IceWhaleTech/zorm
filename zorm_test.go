@@ -1,4 +1,4 @@
-package borm_test
+package zorm_test
 
 import (
 	"context"
@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	b "borm"
-
+	"github.com/IceWhaleTech/zorm"
 	_ "github.com/mattn/go-sqlite3"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -27,36 +26,26 @@ func init() {
 }
 
 type x struct {
-	X  string    `borm:"name"`
-	Y  int64     `borm:"age"`
-	Z  time.Time `borm:"ctime4"`
-	Z1 int64     `borm:"ctime"`
-	Z2 int64     `borm:"ctime2"`
-	Z3 int64     `borm:"ctime3"`
-}
-
-type xx struct {
-	BormLastId int64
-	X          string `borm:"name"`
-	Y          int64  `borm:"age"`
+	X  string    `zorm:"name"`
+	Y  int64     `zorm:"age"`
+	Z  time.Time `zorm:"ctime4"`
+	Z1 int64     `zorm:"ctime"`
+	Z2 int64     `zorm:"ctime2"`
+	Z3 int64     `zorm:"ctime3"`
 }
 
 type x1 struct {
-	X     string `borm:"name"`
+	X     string `zorm:"name"`
 	ctime int64
 }
 
 func (x *x1) CTime() int64 { return x.ctime }
 
-type c struct {
-	C int64 `borm:"count(1)"`
-}
-
-func BenchmarkBormSelect(bm *testing.B) {
+func BenchmarkZormSelect(bm *testing.B) {
 	for i := 0; i < bm.N; i++ {
 		var o []x
-		tbl := b.Table(db, "test").Reuse()
-		tbl.Select(&o, b.Where("`id` >= 1"))
+		tbl := zorm.Table(db, "test").Reuse()
+		tbl.Select(&o, zorm.Where("`id` >= 1"))
 	}
 }
 
@@ -75,14 +64,14 @@ func BenchmarkNormalSelect(bm *testing.B) {
 	}
 }
 
-// 以下用例内容基本保持不变，仅将调用改为通过 b. 前缀（导出API）
+// 以下用例内容基本保持不变，仅将调用改为通过 z. 前缀（导出API）
 // 同时将内部符号替换为导出包装/别名
 
 func TestIndexedBy(t *testing.T) {
 	Convey("normal", t, func() {
 		var ids []int64
-		tbl := b.Table(db, "test").Debug()
-		n, err := tbl.Select(&ids, b.Fields("id"), b.IndexedBy("idx_ctime"), b.Limit(100))
+		tbl := zorm.Table(db, "test").Debug()
+		n, err := tbl.Select(&ids, zorm.Fields("id"), zorm.IndexedBy("idx_ctime"), zorm.Limit(100))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 1)
 		So(len(ids), ShouldBeGreaterThan, 1)
@@ -90,13 +79,13 @@ func TestIndexedBy(t *testing.T) {
 }
 
 // 由于文件较长，这里不重复粘贴所有用例，思路相同：
-// - 将 Table/Where/Fields/Join 等改为 b.Table/b.Where 等
-// - 使用 b.NumberToString/b.StrconvErr/b.CheckInTestFile 等包装
+// - 将 Table/Where/Fields/Join 等改为 z.Table/z.Where 等
+// - 使用 z.NumberToString/z.StrconvErr/z.CheckInTestFile 等包装
 // - 使用 reflect2 保持其余逻辑一致
 
 // 为节省篇幅，这里直接包装原有的大段测试至一个函数调用
 func runAllTests(t *testing.T) {
-	// 原 borm_test.go 中的所有 Convey 块内容原样迁移并替换为 b. 调用
+	// 原 zorm_test.go 中的所有 Convey 块内容原样迁移并替换为 z. 调用
 }
 
 func TestAll(t *testing.T) { runAllTests(t) }

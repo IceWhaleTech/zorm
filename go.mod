@@ -1,6 +1,6 @@
-module borm
+module github.com/IceWhaleTech/zorm
 
-go 1.17
+go 1.21
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
@@ -11,5 +11,5 @@ require (
 require (
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
-	github.com/smarty/assertions v1.15.0 // indirect
+	github.com/smarty/assertions v1.16.0 // indirect
 )

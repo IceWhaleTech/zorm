@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"borm"
-
+	"github.com/IceWhaleTech/zorm"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -32,7 +31,7 @@ func main() {
 
 	// 插入测试数据
 	_, err = db.Exec(`
-		INSERT INTO users (id, name, age) VALUES 
+		INSERT INTO users (id, name, age) VALUES
 		(1, 'Alice', 25),
 		(2, 'Bob', 30),
 		(3, 'Charlie', 35)
@@ -42,11 +41,11 @@ func main() {
 	}
 
 	// 测试Select到Map
-	table := borm.Table(db, "users").Debug()
+	table := zorm.Table(db, "users").Debug()
 
 	// 测试单条记录
 	var result map[string]interface{}
-	count, err := table.Select(&result, borm.Fields("id", "name", "age"))
+	count, err := table.Select(&result, zorm.Fields("id", "name", "age"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,7 +53,7 @@ func main() {
 
 	// 测试多条记录
 	var results []map[string]interface{}
-	count, err = table.Select(&results, borm.Fields("id", "name", "age"), borm.Where(borm.Eq("age", 30)))
+	count, err = table.Select(&results, zorm.Fields("id", "name", "age"), zorm.Where(zorm.Eq("age", 30)))
 	if err != nil {
 		log.Fatal(err)
 	}
