@@ -3,7 +3,6 @@
 
 [![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/IceWhaleTech/zorm/blob/master/LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/zorm)](https://goreportcard.com/report/github.com/IceWhaleTech/zorm)
-[![codecov](https://codecov.io/gh/orca-zhang/zorm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/zorm)
 
 🏎️ Zima ORM library that is simple, ultra-fast and self-mockable for Go
 

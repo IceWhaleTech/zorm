@@ -1,10 +1,8 @@
 
-# borm
+# zorm
 
-[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/orca-zhang/borm/blob/master/LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/orca-zhang/borm)](https://goreportcard.com/report/github.com/orca-zhang/borm)
-[![codecov](https://codecov.io/gh/orca-zhang/borm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/borm)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Forca-zhang%2Fborm.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Forca-zhang%2Fborm?ref=badge_shield)
+[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/IceWhaleTech/zorm/blob/master/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/zorm)](https://goreportcard.com/report/github.com/IceWhaleTech/zorm)
 
 🏎️ 用Go开发的简单、超快、可自测试的Zima ORM
 
@@ -26,7 +24,7 @@
 
 ## 🏗️ Embedded Struct支持
 - **自动展开**：嵌套结构体字段自动展开到SQL
-- **标签支持**：支持borm标签自定义字段名
+- **标签支持**：支持zorm标签自定义字段名
 - **递归处理**：支持多层嵌套结构体
 - **性能优化**：字段映射缓存，避免重复计算
 
@@ -52,7 +50,7 @@
    - **直接替换系统自带Scanner，完整接管数据读取的类型转换**
 - 核心原则：
    - 别像使用其他orm那样把一个表映射到一个model
-   - （在borm里可以用Fields过滤器做到）
+   - （在zorm里可以用Fields过滤器做到）
    - 尽量保持简单把一个操作映射一个model吧！
 - 其他优点：
   - 更自然的where条件（仅在需要加括号时添加，对比gorm）
@@ -66,7 +64,7 @@
 <table style="text-align: center">
    <tr>
       <td colspan="2">库</td>
-      <td><a href="https://github.com/orca-zhang/borm">borm <strong>(me)</strong></a></td>
+      <td><a href="https://github.com/IceWhaleTech/zorm">zorm <strong>(me)</strong></a></td>
       <td><a href="https://github.com/jinzhu/gorm">gorm</a></td>
       <td><a href="https://github.com/go-xorm/xorm">xorm</a></td>
       <td>备注</td>
@@ -77,7 +75,7 @@
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>borm在tag中无需低频的DDL</td>
+      <td>zorm在tag中无需低频的DDL</td>
    </tr>
    <tr>
       <td>无需指定model</td>
@@ -98,14 +96,14 @@
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>会SQL就会用borm</td>
+      <td>会SQL就会用zorm</td>
    </tr>
    <tr>
       <td>可复用原生连接</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>borm重构成本极小</td>
+      <td>zorm重构成本极小</td>
    </tr>
    <tr>
       <td>全类型转换</td>
@@ -119,7 +117,7 @@
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>borm批量和单条使用同一个函数</td>
+      <td>zorm批量和单条使用同一个函数</td>
    </tr>
    <tr>
       <td>Map类型支持</td>
@@ -135,7 +133,7 @@
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>borm非常便于单元测试</td>
+      <td>zorm非常便于单元测试</td>
    </tr>
    <tr>
       <td rowspan="3">性能</td>
@@ -150,7 +148,7 @@
       <td><a href="https://github.com/modern-go/reflect2">reflect2</a></td>
       <td>reflect</td>
       <td>reflect</td>
-      <td>borm零使用ValueOf</td>
+      <td>zorm零使用ValueOf</td>
    </tr>
    <tr>
       <td>缓存优化</td>
@@ -165,7 +163,7 @@
 
 1. 引入包
    ``` golang
-   import b "github.com/orca-zhang/borm"
+   import b "github.com/IceWhaleTech/zorm"
    ```
 
 2. 定义Table对象
@@ -182,14 +180,14 @@
 
 3. （可选）定义model对象
    ``` golang
-   // Info 默认未设置borm tag的字段不会取
+   // Info 默认未设置zorm tag的字段不会取
    type Info struct {
-      ID   int64  `borm:"id"`
-      Name string `borm:"name"`
-      Tag  string `borm:"tag"`
+      ID   int64  `zorm:"id"`
+      Name string `zorm:"name"`
+      Tag  string `zorm:"tag"`
    }
 
-   // 调用t.UseNameWhenTagEmpty()，可以用未设置borm tag的字段名本身作为待获取的db字段
+   // 调用t.UseNameWhenTagEmpty()，可以用未设置zorm tag的字段名本身作为待获取的db字段
    ```
 
 4. 执行操作
@@ -225,20 +223,20 @@
 
    // 支持embedded struct
    type User struct {
-      Name  string `borm:"name"`
-      Email string `borm:"email"`
+      Name  string `zorm:"name"`
+      Email string `zorm:"email"`
       Address struct {
-         Street string `borm:"street"`
-         City   string `borm:"city"`
-      } `borm:"-"` // 嵌入结构体
+         Street string `zorm:"street"`
+         City   string `zorm:"city"`
+      } `zorm:"-"` // 嵌入结构体
    }
    n, err = t.Insert(&user)
 
    // 支持字段忽略
    type User struct {
-      Name     string `borm:"name"`
-      Password string `borm:"-"` // 忽略此字段
-      Email    string `borm:"email"`
+      Name     string `zorm:"name"`
+      Password string `zorm:"-"` // 忽略此字段
+      Email    string `zorm:"email"`
    }
    n, err = t.Insert(&user)
    ```
@@ -301,7 +299,7 @@
   ``` golang
   // Reuse 默认开启；同一调用点重复调用会复用 SQL/元数据
   // Update 示例
-  type User struct { ID int64 `borm:"id"`; Name string `borm:"name"`; Age int `borm:"age"` }
+  type User struct { ID int64 `zorm:"id"`; Name string `zorm:"name"`; Age int `zorm:"age"` }
   for _, u := range users {
       _, _ = t.Update(&u, b.Fields("name", "age"), b.Where(b.Eq("id", u.ID)))
   }
@@ -335,9 +333,9 @@
 - **联表查询**
    ``` golang
    type Info struct {
-      ID   int64  `borm:"t_usr.id"` // 字段定义加表名
-      Name string `borm:"t_usr.name"`
-      Tag  string `borm:"t_tag.tag"`
+      ID   int64  `zorm:"t_usr.id"` // 字段定义加表名
+      Name string `zorm:"t_usr.name"`
+      Tag  string `zorm:"t_tag.tag"`
    }
    
    // 方法一
@@ -354,9 +352,9 @@
    ``` golang
    // 首先需要数据库有一个自增ID的字段
    type Info struct {
-      BormLastId int64 // 添加一个名为BormLastId的整型字段
-      Name       string `borm:"name"`
-      Age        string `borm:"age"`
+      ZormLastId int64 // 添加一个名为ZormLastId的整型字段
+      Name       string `zorm:"name"`
+      Age        string `zorm:"age"`
    }
 
    o := Info{
@@ -365,7 +363,7 @@
    }
    n, err = t.Insert(&o)
 
-   id := o.BormLastId // 获取到插入的id
+   id := o.ZormLastId // 获取到插入的id
    ```
 
 - **新功能示例：Map类型和Embedded Struct**
@@ -381,17 +379,17 @@
 
    // 2. 支持embedded struct
    type Address struct {
-      Street string `borm:"street"`
-      City   string `borm:"city"`
-      Zip    string `borm:"zip"`
+      Street string `zorm:"street"`
+      City   string `zorm:"city"`
+      Zip    string `zorm:"zip"`
    }
 
    type User struct {
-      ID      int64  `borm:"id"`
-      Name    string `borm:"name"`
-      Email   string `borm:"email"`
-      Address Address `borm:"-"` // 嵌入结构体
-      Password string `borm:"-"` // 忽略字段
+      ID      int64  `zorm:"id"`
+      Name    string `zorm:"name"`
+      Email   string `zorm:"email"`
+      Address Address `zorm:"-"` // 嵌入结构体
+      Password string `zorm:"-"` // 忽略字段
    }
 
    user := User{
@@ -408,14 +406,14 @@
 
    // 3. 复杂嵌套结构
    type Profile struct {
-      Bio     string `borm:"bio"`
-      Website string `borm:"website"`
+      Bio     string `zorm:"bio"`
+      Website string `zorm:"website"`
    }
 
    type UserWithProfile struct {
-      ID      int64  `borm:"id"`
-      Name    string `borm:"name"`
-      Profile Profile `borm:"-"` // 嵌套嵌入
+      ID      int64  `zorm:"id"`
+      Name    string `zorm:"name"`
+      Profile Profile `zorm:"-"` // 嵌套嵌入
    }
    ```
    
@@ -439,7 +437,7 @@
 |Debug|打印sql语句|
 |Reuse|根据调用位置复用sql和存储方式（**默认开启**，提供2-14倍性能提升）。内建形状感知与多形状缓存|
 |NoReuse|关闭Reuse功能（不推荐，会降低性能）|
-|UseNameWhenTagEmpty|用未设置borm tag的字段名本身作为待获取的db字段|
+|UseNameWhenTagEmpty|用未设置zorm tag的字段名本身作为待获取的db字段|
 |ToTimestamp|调用Insert时，使用时间戳，而非格式化字符串|
 
 选项使用示例：
@@ -527,13 +525,13 @@
 |示例|说明|
 |-|-|
 |struct内嵌其他struct|自动处理组合对象的字段|
-|borm:"-"标签|标记嵌入结构体|
+|zorm:"-"标签|标记嵌入结构体|
 
 ### 字段忽略功能
 
 |示例|说明|
 |-|-|
-|Password string `borm:"-"`|忽略此字段，不参与数据库操作|
+|Password string `zorm:"-"`|忽略此字段，不参与数据库操作|
 |适用于敏感字段|如密码、临时字段等|
 
 ### IndexedBy
@@ -545,8 +543,8 @@
 # 如何mock
 
 ### mock步骤：
-- 调用`BormMock`指定需要mock的操作
-- 使用`BormMockFinish`检查是否命中mock
+- 调用`ZormMock`指定需要mock的操作
+- 使用`ZormMockFinish`检查是否命中mock
 
 ### 说明：
 
@@ -587,7 +585,7 @@
 ``` golang
    // 必须在_test.go里面设置mock
    // 注意调用方方法名需要带包名
-   b.BormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
+   b.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
 
    // 调用被测试函数
    o1, n1, err := test(db)
@@ -597,7 +595,7 @@
    So(o1, ShouldResemble, o)
 
    // 检查是否全部命中
-   err = b.BormMockFinish()
+   err = b.ZormMockFinish()
    So(err, ShouldBeNil)
 ```
 
@@ -657,12 +655,12 @@
 
 ## 赞助
 
-通过成为赞助商来支持这个项目。 您的logo将显示在此处，并带有指向您网站的链接。 [[成为赞助商](https://opencollective.com/borm#sponsor)]
+通过成为赞助商来支持这个项目。 您的logo将显示在此处，并带有指向您网站的链接。 [[成为赞助商](https://opencollective.com/zorm#sponsor)]
 
-<a href="https://opencollective.com/borm/sponsor/0/website" target="_blank"><img src="https://opencollective.com/borm/sponsor/0/avatar.svg"></a>
-<a href="https://opencollective.com/borm/sponsor/1/website" target="_blank"><img src="https://opencollective.com/borm/sponsor/1/avatar.svg"></a>
-<a href="https://opencollective.com/borm/sponsor/2/website" target="_blank"><img src="https://opencollective.com/borm/sponsor/2/avatar.svg"></a>
-<a href="https://opencollective.com/borm/sponsor/3/website" target="_blank"><img src="https://opencollective.com/borm/sponsor/3/avatar.svg"></a>
+<a href="https://opencollective.com/zorm/sponsor/0/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/0/avatar.svg"></a>
+<a href="https://opencollective.com/zorm/sponsor/1/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/1/avatar.svg"></a>
+<a href="https://opencollective.com/zorm/sponsor/2/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/2/avatar.svg"></a>
+<a href="https://opencollective.com/zorm/sponsor/3/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/3/avatar.svg"></a>
 
 ## 贡献者
 
@@ -672,7 +670,7 @@
 
 并感谢我们所有的支持者！ 🙏
 
-<a href="https://opencollective.com/borm/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/borm/backer/0/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/borm/backer/1/website?requireActive=false" target="_blank"><img src="https://opencollective.com/borm/backer/1/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/borm/backer/2/website?requireActive=false" target="_blank"><img src="https://opencollective.com/borm/backer/2/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/borm/backer/3/website?requireActive=false" target="_blank"><img src="https://opencollective.com/borm/backer/3/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/zorm/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/0/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/zorm/backer/1/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/1/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/zorm/backer/2/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/2/avatar.svg?requireActive=false"></a>
+<a href="https://opencollective.com/zorm/backer/3/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/3/avatar.svg?requireActive=false"></a>
