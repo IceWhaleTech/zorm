@@ -1,10 +1,9 @@
 
 # zorm
 
-[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/orca-zhang/zorm/blob/master/LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/orca-zhang/zorm)](https://goreportcard.com/report/github.com/orca-zhang/zorm)
+[![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/IceWhaleTech/zorm/blob/master/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/zorm)](https://goreportcard.com/report/github.com/IceWhaleTech/zorm)
 [![codecov](https://codecov.io/gh/orca-zhang/zorm/branch/master/graph/badge.svg)](https://codecov.io/gh/orca-zhang/zorm)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Forca-zhang%2Fzorm.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Forca-zhang%2Fzorm?ref=badge_shield)
 
 🏎️ Zima ORM library that is simple, ultra-fast and self-mockable for Go
 
