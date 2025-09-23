@@ -125,7 +125,7 @@
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
-      <td>无需定义struct</td>
+      <td>无需定义struct，灵活处理动态字段</td>
    </tr>
    <tr>
       <td>可测试性</td>
