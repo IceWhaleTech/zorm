@@ -6,7 +6,7 @@
 
 🏎️ 用Go开发的简单、超快、可自测试的Zima ORM
 
-[English](README_en.md) | [中文](README.md)
+[English](README.md) | [中文](README_cn.md)
 
 # 🚀 最新功能
 
