@@ -652,3 +652,11 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 - Join queries
 - Connection pool
 - Read-write separation
+
+- ## Contributors
+
+The existence of this project is thanks to all contributors.
+
+Please give us a 💖star💖 to support us, thank you.
+
+And thank you to all our supporters! 🙏
