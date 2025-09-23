@@ -163,14 +163,14 @@
 
 1. 引入包
    ``` golang
-   import b "github.com/IceWhaleTech/zorm"
+   import z "github.com/IceWhaleTech/zorm"
    ```
 
 2. 定义Table对象
    ``` golang
-   t := b.Table(d.DB, "t_usr")
+   t := z.Table(d.DB, "t_usr")
 
-   t1 := b.Table(d.DB, "t_usr", ctx)
+   t1 := z.Table(d.DB, "t_usr", ctx)
    ```
 
 - `d.DB`是支持Exec/Query/QueryRow的数据库连接对象
@@ -204,13 +204,13 @@
    n, err = t.ReplaceInto(&o)
 
    // 只插入部分字段（其他使用缺省）
-   n, err = t.Insert(&o, b.Fields("name", "tag"))
+   n, err = t.Insert(&o, z.Fields("name", "tag"))
 
    // 解决主键冲突
-   n, err = t.Insert(&o, b.Fields("name", "tag"),
-      b.OnConflictDoUpdateSet([]string{"id"}, b.V{
+   n, err = t.Insert(&o, z.Fields("name", "tag"),
+      z.OnConflictDoUpdateSet([]string{"id"}, z.V{
          "name": "new_name",
-         "age":  b.U("age+1"), // 使用b.U来处理非变量更新
+         "age":  z.U("age+1"), // 使用b.U来处理非变量更新
       }))
 
    // 使用map插入（无需定义struct）
@@ -245,54 +245,54 @@
    ``` golang
    // o可以是对象/slice/ptr slice
    n, err := t.Select(&o, 
-      b.Where("name = ?", name), 
-      b.GroupBy("id"), 
-      b.Having(b.Gt("id", 0)), 
-      b.OrderBy("id", "name"), 
-      b.Limit(1))
+      z.Where("name = ?", name), 
+      z.GroupBy("id"), 
+      z.Having(z.Gt("id", 0)), 
+      z.OrderBy("id", "name"), 
+      z.Limit(1))
 
    // 使用基本类型+Fields获取条目数（n的值为1，因为结果只有1条）
    var cnt int64
-   n, err = t.Select(&cnt, b.Fields("count(1)"), b.Where("name = ?", name))
+   n, err = t.Select(&cnt, z.Fields("count(1)"), z.Where("name = ?", name))
 
    // 还可以支持数组
    var ids []int64
-   n, err = t.Select(&ids, b.Fields("id"), b.Where("name = ?", name))
+   n, err = t.Select(&ids, z.Fields("id"), z.Where("name = ?", name))
 
    // 可以强制索引
-   n, err = t.Select(&ids, b.Fields("id"), b.IndexedBy("idx_xxx"), b.Where("name = ?", name))
+   n, err = t.Select(&ids, z.Fields("id"), z.IndexedBy("idx_xxx"), z.Where("name = ?", name))
    ```
 
 - Select 到 Map（无需定义 struct）
   ``` golang
   // 单行映射到 map
   var m map[string]interface{}
-  n, err := t.Select(&m, b.Fields("id", "name", "age"), b.Where(b.Eq("id", 1)))
+  n, err := t.Select(&m, z.Fields("id", "name", "age"), z.Where(z.Eq("id", 1)))
 
   // 多行映射到 []map
   var ms []map[string]interface{}
-  n, err = t.Select(&ms, b.Fields("id", "name", "age"), b.Where(b.Gt("age", 18)))
+  n, err = t.Select(&ms, z.Fields("id", "name", "age"), z.Where(z.Gt("age", 18)))
   ```
 
 - 更新
    ``` golang
    // o可以是对象/slice/ptr slice
-   n, err = t.Update(&o, b.Where(b.Eq("id", id)))
+   n, err = t.Update(&o, z.Where(z.Eq("id", id)))
 
    // 使用map更新
-   n, err = t.Update(b.V{
+   n, err = t.Update(z.V{
          "name": "new_name",
          "tag":  "tag1,tag2,tag3",
-         "age":  b.U("age+1"), // 使用b.U来处理非变量更新
-      }, b.Where(b.Eq("id", id)))
+         "age":  z.U("age+1"), // 使用b.U来处理非变量更新
+      }, z.Where(z.Eq("id", id)))
 
    // 使用map更新部分字段
-   n, err = t.Update(b.V{
+   n, err = t.Update(z.V{
          "name": "new_name",
          "tag":  "tag1,tag2,tag3",
-      }, b.Fields("name"), b.Where(b.Eq("id", id)))
+      }, z.Fields("name"), z.Where(z.Eq("id", id)))
 
-   n, err = t.Update(&o, b.Fields("name"), b.Where(b.Eq("id", id)))
+   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
    ```
 
 - CRUD 配合 Reuse（默认开启）
@@ -301,7 +301,7 @@
   // Update 示例
   type User struct { ID int64 `zorm:"id"`; Name string `zorm:"name"`; Age int `zorm:"age"` }
   for _, u := range users {
-      _, _ = t.Update(&u, b.Fields("name", "age"), b.Where(b.Eq("id", u.ID)))
+      _, _ = t.Update(&u, z.Fields("name", "age"), z.Where(z.Eq("id", u.ID)))
   }
 
   // Insert 示例
@@ -313,21 +313,21 @@
 - 删除
    ``` golang
    // 根据条件删除
-   n, err = t.Delete(b.Where("name = ?", name))
-   n, err = t.Delete(b.Where(b.Eq("id", id)))
+   n, err = t.Delete(z.Where("name = ?", name))
+   n, err = t.Delete(z.Where(z.Eq("id", id)))
    ```
 
 - **可变条件**
    ``` golang
-   conds := []interface{}{b.Cond("1=1")} // 防止空where条件
+   conds := []interface{}{z.Cond("1=1")} // 防止空where条件
    if name != "" {
-      conds = append(conds, b.Eq("name", name))
+      conds = append(conds, z.Eq("name", name))
    }
    if id > 0 {
-      conds = append(conds, b.Eq("id", id))
+      conds = append(conds, z.Eq("id", id))
    }
    // 执行查询操作
-   n, err := t.Select(&o, b.Where(conds...))
+   n, err := t.Select(&o, z.Where(conds...))
    ```
 
 - **联表查询**
@@ -339,13 +339,13 @@
    }
    
    // 方法一
-   t := b.Table(d.DB, "t_usr join t_tag on t_usr.id=t_tag.id") // 表名用join语句
+   t := z.Table(d.DB, "t_usr join t_tag on t_usr.id=t_tag.id") // 表名用join语句
    var o Info
-   n, err := t.Select(&o, b.Where(b.Eq("t_usr.id", id))) // 条件加上表名
+   n, err := t.Select(&o, z.Where(z.Eq("t_usr.id", id))) // 条件加上表名
 
    // 方法二
-   t = b.Table(d.DB, "t_usr") // 正常表名
-   n, err = t.Select(&o, b.Join("join t_tag on t_usr.id=t_tag.id"), b.Where(b.Eq("t_usr.id", id))) // 条件需要加上表名
+   t = z.Table(d.DB, "t_usr") // 正常表名
+   n, err = t.Select(&o, z.Join("join t_tag on t_usr.id=t_tag.id"), z.Where(z.Eq("t_usr.id", id))) // 条件需要加上表名
    ```
 
 -  获取插入的自增id
@@ -420,12 +420,12 @@
 - 正在使用其他orm框架（新的接口先切过来吧）
    ``` golang
    // [gorm] db是一个*gorm.DB
-   t := b.Table(db.DB(), "tbl")
+   t := z.Table(db.DB(), "tbl")
 
    // [xorm] db是一个*xorm.EngineGroup
-   t := b.Table(db.Master().DB().DB, "tbl")
+   t := z.Table(db.Master().DB().DB, "tbl")
    // or
-   t := b.Table(db.Slave().DB().DB, "tbl")
+   t := z.Table(db.Slave().DB().DB, "tbl")
    ```
 
 # 其他细节
@@ -451,7 +451,7 @@
    n, err = t.NoReuse().Insert(&o)
 
    // Reuse 内建形状守卫：当同一调用点的 SQL 形状（Fields/Where/IN 占位符个数等）可能变化时，自动防止错误复用
-   n, err = t.Update(&o, b.Fields("name"), b.Where(b.Eq("id", id)))
+   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
    ```
 
 ### Where
@@ -574,8 +574,8 @@
 
    func test(db *sql.DB) (X, int, error) {
       var o X
-      tbl := b.Table(db, "tbl")
-      n, err := tbl.Select(&o, b.Where("`id` >= ?", 1), b.Limit(100))
+      tbl := z.Table(db, "tbl")
+      n, err := tbl.Select(&o, z.Where("`id` >= ?", 1), z.Limit(100))
       return o, n, err
    }
 ```
@@ -585,7 +585,7 @@
 ``` golang
    // 必须在_test.go里面设置mock
    // 注意调用方方法名需要带包名
-   b.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
+   z.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
 
    // 调用被测试函数
    o1, n1, err := test(db)
@@ -595,7 +595,7 @@
    So(o1, ShouldResemble, o)
 
    // 检查是否全部命中
-   err = b.ZormMockFinish()
+   err = z.ZormMockFinish()
    So(err, ShouldBeNil)
 ```
 
@@ -653,15 +653,6 @@
 - 连接池
 - 读写分离
 
-## 赞助
-
-通过成为赞助商来支持这个项目。 您的logo将显示在此处，并带有指向您网站的链接。 [[成为赞助商](https://opencollective.com/zorm#sponsor)]
-
-<a href="https://opencollective.com/zorm/sponsor/0/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/0/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/1/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/1/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/2/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/2/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/3/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/3/avatar.svg"></a>
-
 ## 贡献者
 
 这个项目的存在要感谢所有做出贡献的人。
@@ -669,8 +660,3 @@
 请给我们一个💖star💖来支持我们，谢谢。
 
 并感谢我们所有的支持者！ 🙏
-
-<a href="https://opencollective.com/zorm/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/0/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/1/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/1/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/2/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/2/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/3/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/3/avatar.svg?requireActive=false"></a>
