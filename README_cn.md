@@ -170,7 +170,7 @@
    ``` golang
    t := z.Table(d.DB, "t_usr")
 
-   t1 := z.Table(d.DB, "t_usr", ctx)
+   t1 := z.TableContext(ctx, d.DB, "t_usr")
    ```
 
 - `d.DB`是支持Exec/Query/QueryRow的数据库连接对象
