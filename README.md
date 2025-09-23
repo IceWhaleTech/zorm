@@ -163,7 +163,7 @@
 
 1. Import package
    ``` golang
-   import b "github.com/IceWhaleTech/zorm"
+   import z "github.com/IceWhaleTech/zorm"
    ```
 
 2. Define Table object
@@ -652,25 +652,3 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 - Join queries
 - Connection pool
 - Read-write separation
-
-## Sponsors
-
-Support this project by becoming a sponsor. Your logo will show up here with a link to your website. [[Become a sponsor](https://opencollective.com/zorm#sponsor)]
-
-<a href="https://opencollective.com/zorm/sponsor/0/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/0/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/1/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/1/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/2/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/2/avatar.svg"></a>
-<a href="https://opencollective.com/zorm/sponsor/3/website" target="_blank"><img src="https://opencollective.com/zorm/sponsor/3/avatar.svg"></a>
-
-## Contributors
-
-The existence of this project is thanks to all contributors.
-
-Please give us a 💖star💖 to support us, thank you.
-
-And thank you to all our supporters! 🙏
-
-<a href="https://opencollective.com/zorm/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/0/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/1/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/1/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/2/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/2/avatar.svg?requireActive=false"></a>
-<a href="https://opencollective.com/zorm/backer/3/website?requireActive=false" target="_blank"><img src="https://opencollective.com/zorm/backer/3/avatar.svg?requireActive=false"></a>
