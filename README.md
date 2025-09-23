@@ -170,7 +170,7 @@
    ``` golang
    t := z.Table(d.DB, "t_usr")
 
-   t1 := z.Table(d.DB, "t_usr", ctx)
+   t1 := z.TableContext(ctx, d.DB, "t_usr")
    ```
 
 - `d.DB` is a database connection object that supports Exec/Query/QueryRow
