@@ -132,7 +132,7 @@ func TestMapSupport(t *testing.T) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT,
 		age INTEGER,
-		email TEXT,
+		email TEXT UNIQUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`
 	_, err := db.Exec(createTableSQL)

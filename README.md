@@ -8,6 +8,11 @@
 
 [English](README.md) | [中文](README_cn.md)
 
+## 📚 Documentation
+
+- **[Features](FEATURES.md)** - Complete feature overview and implementation details
+- **[Performance Report](PERFORMANCE_REPORT.md)** - Detailed performance benchmarks and optimization analysis
+
 # 🚀 Latest Features
 
 ## ⚡ Reuse Function Enabled by Default - Revolutionary Performance Improvement
@@ -33,6 +38,44 @@
 - **100% Memory Optimization**: Zero allocation design, reduced memory usage
 - **Multi-format Support**: Standard format, timezone format, nanosecond format, date-only format
 - **Empty Value Handling**: Automatically handle empty strings and NULL values
+
+## 🔧 Enhanced Type Support
+- **Non-Pointer Types**: Support for both pointer and non-pointer struct/slice types in Insert/Update operations
+- **Auto-Increment Tags**: Natural struct tag support for auto-increment primary keys (`zorm:"id,auto_incr"`)
+
+## 🔗 Advanced Join Queries
+- **Flexible ON Conditions**: Support both string and condition object formats for JOIN operations
+- **Multiple Join Types**: LEFT JOIN, RIGHT JOIN, INNER JOIN, FULL OUTER JOIN
+- **Complex Conditions**: Support nested conditions with AND/OR logic in ON clauses
+- **Type-Safe**: Full parameter binding and type safety for join conditions
+
+## 🔄 Transaction Support
+- **Simple API**: `Begin()`, `Commit()`, `Rollback()` methods for transaction management
+- **Context Support**: `BeginContext()` for context-aware transactions
+- **Error Handling**: Automatic rollback on errors, manual rollback support
+- **SQLite Compatible**: Full transaction support for SQLite databases
+
+## 🏊 Connection Pool Management
+- **Configurable Pool**: Set max open connections, idle connections, and connection lifetime
+- **Default Settings**: Sensible defaults for most applications
+- **Performance Tuning**: Optimize connection pool for your specific workload
+- **Resource Management**: Automatic connection cleanup and resource management
+
+## 📊 Read-Write Separation
+- **Master-Slave Architecture**: Automatic routing of read/write operations
+- **Round-Robin Load Balancing**: Distribute read queries across multiple slave databases
+- **Transparent Operation**: No code changes required for existing queries
+- **High Availability**: Improved performance and fault tolerance
+
+## 🧪 Experimental Features
+
+### 🏗️ DDL and AutoMigrate
+- **Table Creation**: Create tables from struct definitions with `CreateTable()`
+- **Auto Migration**: Automatically migrate table schemas with `AutoMigrate()`
+- **Schema Management**: Check table existence, drop tables, and manage database schema
+- **Tag-Based Configuration**: Use struct tags to define field properties and constraints
+- **⚠️ Experimental**: This feature is under development and may change in future versions
+
 
 # Goals
 - **Easy to use**: SQL-Like (One-Line-CRUD)
@@ -563,6 +606,168 @@ Option usage example:
 
 - Last three parameters are `return data`, `return affected rows` and `error`
 - Can only be used in test files
+
+
+## 🚀 New Features Examples
+
+### Auto-Increment Primary Keys with Struct Tags
+
+```go
+type User struct {
+    ID   int64  `zorm:"id,auto_incr"` // Auto-increment primary key
+    Name string `zorm:"name"`
+    Age  int    `zorm:"age"`
+}
+
+// Insert with auto-increment ID
+user := User{Name: "Alice", Age: 25}
+tbl := zorm.Table(db, "users")
+n, err := tbl.Insert(&user)
+// user.ID will be automatically set to the generated ID
+```
+
+**Supported tag format:**
+- `zorm:"id,auto_incr"` - Auto-increment primary key
+
+### Non-Pointer Type Support
+
+```go
+// Support both pointer and non-pointer types
+user := User{Name: "Bob", Age: 30}        // Non-pointer
+users := []User{{Name: "Charlie", Age: 35}} // Non-pointer slice
+
+// Both work seamlessly
+tbl.Insert(user)   // Non-pointer struct
+tbl.Insert(&users) // Non-pointer slice
+```
+
+### Advanced Join Queries
+
+```go
+// String format ON conditions
+var results []UserOrder
+n, err := tbl.Select(&results,
+    zorm.Fields("users.id", "users.name", "orders.amount"),
+    zorm.InnerJoin("orders", "users.id = orders.user_id"),
+    zorm.Where("orders.status = ?", "completed"),
+)
+
+// Condition object format ON conditions
+n, err := tbl.Select(&results,
+    zorm.Fields("users.id", "users.name", "orders.amount"),
+    zorm.LeftJoin("orders", 
+        zorm.And(
+            zorm.Eq("users.id", zorm.U("orders.user_id")),
+            zorm.Neq("orders.status", "cancelled"),
+        ),
+    ),
+)
+```
+
+### Transaction Support
+
+```go
+// Begin transaction
+tx, err := zorm.Begin(db)
+if err != nil {
+    return err
+}
+defer tx.Rollback() // Ensure rollback on error
+
+// Use transaction
+txTbl := zorm.Table(tx, "users")
+_, err = txTbl.Insert(&user)
+if err != nil {
+    return err
+}
+
+// Commit transaction
+err = tx.Commit()
+if err != nil {
+    return err
+}
+```
+
+### Connection Pool Configuration
+
+```go
+// Configure connection pool
+pool := &zorm.ConnectionPool{
+    MaxOpenConns:    100,
+    MaxIdleConns:    10,
+    ConnMaxLifetime: time.Hour,
+    ConnMaxIdleTime: time.Minute * 30,
+}
+zorm.SetConnectionPool(db, pool)
+
+// Or use default settings
+zorm.SetConnectionPool(db, zorm.DefaultConnectionPool())
+```
+
+### Read-Write Separation
+
+```go
+// Create read-write database
+master := sql.Open("sqlite3", "master.db")
+slave1 := sql.Open("sqlite3", "slave1.db")
+slave2 := sql.Open("sqlite3", "slave2.db")
+
+rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
+
+// Use read-write database
+tbl := zorm.Table(rwdb, "users")
+// Read operations automatically go to slaves
+n, err := tbl.Select(&users, zorm.Fields("*"))
+// Write operations automatically go to master
+n, err = tbl.Insert(&user)
+```
+
+### 🧪 DDL and AutoMigrate (Experimental)
+
+```go
+// Define model with struct tags
+type User struct {
+    ID        int64     `zorm:"id,auto_incr"`                    // Auto-increment primary key
+    Name      string    `zorm:"name,not_null"`                   // Non-null field
+    Email     string    `zorm:"email,not_null"`                  // Non-null field
+    Age       int       `zorm:"age,default:0"`                   // Field with default value
+    IsActive  bool      `zorm:"is_active,default:true"`          // Boolean field
+    CreatedAt time.Time `zorm:"created_at,default:CURRENT_TIMESTAMP"` // Timestamp field
+    UpdatedAt *time.Time `zorm:"updated_at"`                     // Nullable timestamp
+    Profile   string    `zorm:"profile"`                         // Nullable field
+    Password  string    `zorm:"-"`                               // Ignored field
+}
+
+// Create table from struct
+config := &zorm.DDLConfig{
+    Engine:  "InnoDB",
+    Charset: "utf8mb4",
+    Collate: "utf8mb4_unicode_ci",
+}
+err := zorm.CreateTable(db, "users", User{}, config)
+
+// Auto-migrate multiple tables
+err = zorm.AutoMigrate(db, &User{}, &Product{}, &Order{})
+
+// Check if table exists
+exists, err := zorm.TableExists(db, "users")
+
+// Drop table
+err = zorm.DropTable(db, "users")
+```
+
+**⚠️ Experimental Feature Warning:**
+- This feature is under active development
+- API may change in future versions
+- Use with caution in production environments
+- Feedback and contributions are welcome
+
+**Supported struct tags:**
+- `zorm:"field_name"` - Field name mapping
+- `zorm:"field_name,auto_incr"` - Auto-increment primary key
+- `zorm:"field_name,not_null"` - Non-null constraint
+- `zorm:"field_name,default:value"` - Default value
+- `zorm:"-"` - Ignore field
 
 
 ### Usage example:

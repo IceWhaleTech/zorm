@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -135,16 +136,19 @@ func (t *ZormTable) NoSafeReuse() *ZormTable { return t }
 
 // buildShapeKey 基于调用点key和参数形状构建复用key
 func buildShapeKey(baseKey string, op string, args []ZormItem) string {
-	var b strings.Builder
+	b := getSQLBuilder()
+	defer putSQLBuilder(b)
+
 	b.WriteString(baseKey)
 	b.WriteString("|")
 	b.WriteString(op)
 	for _, a := range args {
 		b.WriteString("|")
 		b.WriteString(strconv.Itoa(a.Type()))
-		var sb strings.Builder
-		a.BuildSQL(&sb)
+		sb := getSQLBuilder()
+		a.BuildSQL(sb)
 		b.WriteString(sb.String())
+		putSQLBuilder(sb)
 	}
 	return b.String()
 }
@@ -157,6 +161,42 @@ func Fields(fields ...string) *fieldsItem {
 // Join .
 func Join(stmt string) *joinItem {
 	return &joinItem{Stmt: stmt}
+}
+
+// LeftJoin 左连接
+func LeftJoin(table string, on ...interface{}) *joinItem {
+	return &joinItem{
+		JoinType: "LEFT JOIN",
+		Table:    table,
+		On:       on,
+	}
+}
+
+// RightJoin 右连接
+func RightJoin(table string, on ...interface{}) *joinItem {
+	return &joinItem{
+		JoinType: "RIGHT JOIN",
+		Table:    table,
+		On:       on,
+	}
+}
+
+// InnerJoin 内连接
+func InnerJoin(table string, on ...interface{}) *joinItem {
+	return &joinItem{
+		JoinType: "INNER JOIN",
+		Table:    table,
+		On:       on,
+	}
+}
+
+// FullJoin 全连接
+func FullJoin(table string, on ...interface{}) *joinItem {
+	return &joinItem{
+		JoinType: "FULL OUTER JOIN",
+		Table:    table,
+		On:       on,
+	}
 }
 
 // Where .
@@ -284,6 +324,10 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		stmtArgs []interface{}
 	)
 
+	// 使用池化的参数切片
+	stmtArgs = getArgsSlice()
+	defer putArgsSlice(stmtArgs)
+
 	switch rt.Kind() {
 	case reflect.Ptr:
 		rt = rt.(reflect2.PtrType).Elem()
@@ -341,7 +385,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 	} else {
 		item = &DataBindingItem{Type: rtElem}
 
-		var sb strings.Builder
+		sb := getSQLBuilder()
 		sb.WriteString("select ")
 
 		if isArray {
@@ -358,14 +402,51 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				m := t.getStructFieldMap(s)
 
 				for _, field := range args[0].(*fieldsItem).Fields {
-					f := m[field]
-					item.Cols = append(item.Cols, &scanner{
-						Type: f.Type(),
-						Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-					})
+					if field == "*" {
+						// 处理通配符：选择所有字段
+						for i := 0; i < s.NumField(); i++ {
+							f := s.Field(i)
+							ft := f.Tag().Get("zorm")
+
+							// 忽略zorm tag为"-"的字段
+							if ft == "-" {
+								continue
+							}
+
+							// 处理embedded struct
+							if f.Anonymous() && f.Type().Kind() == reflect.Struct {
+								embeddedStruct := f.Type().(reflect2.StructType)
+								for j := 0; j < embeddedStruct.NumField(); j++ {
+									ef := embeddedStruct.Field(j)
+									eft := ef.Tag().Get("zorm")
+									if eft == "-" {
+										continue
+									}
+									item.Cols = append(item.Cols, &scanner{
+										Type: ef.Type(),
+										Val:  ef.UnsafeGet(reflect2.PtrOf(item.Elem)),
+									})
+								}
+								continue
+							}
+
+							item.Cols = append(item.Cols, &scanner{
+								Type: f.Type(),
+								Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
+							})
+						}
+					} else {
+						f := m[field]
+						if f != nil {
+							item.Cols = append(item.Cols, &scanner{
+								Type: f.Type(),
+								Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
+							})
+						}
+					}
 				}
 
-				(args[0]).BuildSQL(&sb)
+				(args[0]).BuildSQL(sb)
 				args = args[1:]
 
 			} else {
@@ -382,9 +463,9 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 					}
 
 					if ft == "" {
-						fieldEscape(&sb, f.Name())
+						fieldEscape(sb, f.Name())
 					} else {
-						fieldEscape(&sb, ft)
+						fieldEscape(sb, ft)
 					}
 
 					item.Cols = append(item.Cols, &scanner{
@@ -407,7 +488,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				if i > 0 {
 					sb.WriteString(",")
 				}
-				fieldEscape(&sb, field)
+				fieldEscape(sb, field)
 
 				// 为map创建interface{}类型的scanner
 				var temp interface{}
@@ -433,20 +514,21 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				Val:  reflect2.PtrOf(item.Elem),
 			})
 
-			fieldEscape(&sb, fi.Fields[0])
+			fieldEscape(sb, fi.Fields[0])
 			args = args[1:]
 		}
 
 		sb.WriteString(" from ")
 
-		fieldEscape(&sb, t.Name)
+		fieldEscape(sb, t.Name)
 
 		for _, arg := range args {
-			arg.BuildSQL(&sb)
+			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
 
 		item.SQL = sb.String()
+		putSQLBuilder(sb) // 释放字符串构建器
 
 		if t.Cfg.Reuse {
 			callSite := getCallSite()
@@ -644,8 +726,9 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		// 构建SQL和字段信息
 		item = &DataBindingItem{Type: rtElem}
 
+		sb := getSQLBuilder()
 		sb.WriteString(prefix)
-		fieldEscape(&sb, t.Name)
+		fieldEscape(sb, t.Name)
 		sb.WriteString(" (")
 
 		switch rt.Kind() {
@@ -662,6 +745,24 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					isPtrArray = true
 				}
 			}
+		case reflect.Struct:
+			// 支持非指针结构体
+			rtElem = rt
+			// 创建临时指针用于操作
+			objs = reflect2.PtrOf(objs)
+			rt = reflect2.TypeOf(objs)
+		case reflect.Slice:
+			// 支持非指针切片
+			rtElem = rt.(reflect2.ListType).Elem()
+			isArray = true
+			if rtElem.Kind() == reflect.Ptr {
+				rtPtr = rtElem
+				rtElem = rtElem.(reflect2.PtrType).Elem()
+				isPtrArray = true
+			}
+			// 创建临时指针用于操作
+			objs = reflect2.PtrOf(objs)
+			rt = reflect2.TypeOf(objs)
 		case reflect.Map:
 			// 处理map类型
 			mapType := rt.(reflect2.MapType)
@@ -672,32 +773,79 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 				return 0, errors.New("map key must be string type")
 			}
 
-			// 使用通用字段收集函数处理map
-			var fieldInfos []FieldInfo
-			if err := t.collectFieldsGeneric(objs, rt, &sb, &fieldInfos); err != nil {
-				return 0, err
-			}
+			// 检查是否有Fields参数
+			if len(args) > 0 && args[0].Type() == _fields {
+				// 使用Fields参数指定的字段
+				fields := args[0].(*fieldsItem).Fields
+				fieldMap := make(map[string]interface{})
 
-			// 构建VALUES部分
-			sb.WriteString(") values ")
-			sb.WriteString("(")
-			for i := range fieldInfos {
-				if i > 0 {
-					sb.WriteString(",")
+				// 从map中提取指定字段
+				mapVal := reflect.ValueOf(objs)
+				for _, field := range fields {
+					if mapVal.MapIndex(reflect.ValueOf(field)).IsValid() {
+						fieldMap[field] = mapVal.MapIndex(reflect.ValueOf(field)).Interface()
+					}
 				}
-				sb.WriteString("?")
-			}
-			sb.WriteString(")")
 
-			// 构建参数
-			for _, fieldInfo := range fieldInfos {
-				stmtArgs = append(stmtArgs, fieldInfo.GetValue(nil))
-			}
+				// 构建字段列表
+				for i, field := range fields {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					fieldEscape(sb, field)
+				}
 
-			// 处理额外的args
-			for _, arg := range args {
-				arg.BuildSQL(&sb)
-				arg.BuildArgs(&stmtArgs)
+				sb.WriteString(") values (")
+				for i := range fields {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					sb.WriteString("?")
+				}
+				sb.WriteString(")")
+
+				// 构建参数
+				for _, field := range fields {
+					if val, exists := fieldMap[field]; exists {
+						stmtArgs = append(stmtArgs, val)
+					} else {
+						stmtArgs = append(stmtArgs, nil)
+					}
+				}
+
+				// 处理额外的args
+				for i := 1; i < len(args); i++ {
+					args[i].BuildSQL(sb)
+					args[i].BuildArgs(&stmtArgs)
+				}
+			} else {
+				// 使用所有字段
+				// 使用通用字段收集函数处理map
+				var fieldInfos []FieldInfo
+				if err := t.collectFieldsGeneric(objs, rt, sb, &fieldInfos); err != nil {
+					return 0, err
+				}
+
+				// 构建VALUES部分
+				sb.WriteString(") values (")
+				for i := range fieldInfos {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					sb.WriteString("?")
+				}
+				sb.WriteString(")")
+
+				// 构建参数
+				for _, fieldInfo := range fieldInfos {
+					stmtArgs = append(stmtArgs, fieldInfo.GetValue(nil))
+				}
+
+				// 处理额外的args
+				for _, arg := range args {
+					arg.BuildSQL(sb)
+					arg.BuildArgs(&stmtArgs)
+				}
 			}
 
 			// 执行SQL
@@ -733,18 +881,18 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 				}
 			}
 
-			(args[0]).BuildSQL(&sb)
+			(args[0]).BuildSQL(sb)
 			args = args[1:]
 
 		} else {
-			t.collectFieldsForInsert(s, &sb, &cols)
+			t.collectFieldsForInsert(s, sb, &cols)
 		}
 
 		sb.WriteString(") values ")
 
-		sbTmp := &sb
+		sbTmp := sb
 		if isArray {
-			sbTmp = &strings.Builder{}
+			sbTmp = getSQLBuilder()
 		}
 
 		sbTmp.WriteString("(")
@@ -766,6 +914,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 				sb.WriteString(sbTmp.String())
 				t.inputArgs(&stmtArgs, cols, rtPtr, s, isPtrArray, rt.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
 			}
+			putSQLBuilder(sbTmp) // 释放临时构建器
 		} else {
 			// 普通元素
 			t.inputArgs(&stmtArgs, cols, rtPtr, s, false, reflect2.PtrOf(objs))
@@ -773,11 +922,12 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 
 		// on duplicate key update
 		for _, arg := range args {
-			arg.BuildSQL(&sb)
+			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
 
 		item.SQL = sb.String()
+		putSQLBuilder(sb) // 释放字符串构建器
 		item.Cols = make([]interface{}, len(cols))
 		for i, f := range cols {
 			item.Cols[i] = f
@@ -802,9 +952,46 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 
 	if !isArray && rtElem.Kind() == reflect.Struct {
 		s := rtElem.(reflect2.StructType)
-		if f := s.FieldByName("ZormLastId"); f != nil {
+		// 首先尝试使用新的自增主键字段
+		if autoField := t.getAutoIncrementField(s); autoField != nil {
+			id, _ := res.LastInsertId()
+			autoField.UnsafeSet(reflect2.PtrOf(objs), reflect2.PtrOf(id))
+		} else if f := s.FieldByName("ZormLastId"); f != nil {
+			// 向后兼容：支持旧的 ZormLastId 字段
 			id, _ := res.LastInsertId()
 			f.UnsafeSet(reflect2.PtrOf(objs), reflect2.PtrOf(id))
+		}
+	} else if isArray && rtElem.Kind() == reflect.Struct {
+		// 处理批量插入的自增ID设置
+		s := rtElem.(reflect2.StructType)
+		if autoField := t.getAutoIncrementField(s); autoField != nil {
+			slice := rt.(reflect2.SliceType)
+			length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
+			lastInsertId, _ := res.LastInsertId()
+			// 为每个对象设置自增ID（假设是连续的自增ID）
+			for i := 0; i < length; i++ {
+				ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+				if isPtrArray {
+					// 指针数组：ptr 已经是指针
+					autoField.UnsafeSet(ptr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+				} else {
+					// 值数组：需要获取指针
+					autoField.UnsafeSet(reflect2.PtrOf(ptr), reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+				}
+			}
+		} else if f := s.FieldByName("ZormLastId"); f != nil {
+			// 向后兼容：支持旧的 ZormLastId 字段
+			slice := rt.(reflect2.SliceType)
+			length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
+			lastInsertId, _ := res.LastInsertId()
+			for i := 0; i < length; i++ {
+				ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+				if isPtrArray {
+					f.UnsafeSet(ptr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+				} else {
+					f.UnsafeSet(reflect2.PtrOf(ptr), reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+				}
+			}
 		}
 	}
 
@@ -826,10 +1013,13 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 	}
 
 	var (
-		sb       strings.Builder
 		stmtArgs []interface{}
 		item     *DataBindingItem
 	)
+
+	// 使用池化的参数切片
+	stmtArgs = getArgsSlice()
+	defer putArgsSlice(stmtArgs)
 
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
@@ -858,17 +1048,25 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		} else {
 			// Struct类型
 			rt := reflect2.TypeOf(obj)
-			if rt.Kind() != reflect.Ptr {
-				return 0, errors.New("update requires pointer to struct")
+			var objPtr interface{}
+
+			if rt.Kind() == reflect.Ptr {
+				rt = rt.(reflect2.PtrType).Elem()
+				objPtr = obj
+			} else if rt.Kind() == reflect.Struct {
+				// 支持非指针结构体
+				objPtr = reflect2.PtrOf(obj)
+				rt = reflect2.TypeOf(objPtr).(reflect2.PtrType).Elem()
+			} else {
+				return 0, errors.New("update requires struct or pointer to struct")
 			}
-			rt = rt.(reflect2.PtrType).Elem()
 			if rt.Kind() == reflect.Struct {
 				s := rt.(reflect2.StructType)
 				cols := make([]reflect2.StructField, len(item.Cols))
 				for i, f := range item.Cols {
 					cols[i] = f.(reflect2.StructField)
 				}
-				t.inputArgs(&stmtArgs, cols, nil, s, false, reflect2.PtrOf(obj))
+				t.inputArgs(&stmtArgs, cols, nil, s, false, reflect2.PtrOf(objPtr))
 			} else {
 				return 0, errors.New("non-structure type not supported yet")
 			}
@@ -882,8 +1080,9 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		// 构建SQL和字段信息
 		item = &DataBindingItem{Type: reflect2.TypeOf(obj)}
 
+		sb := getSQLBuilder()
 		sb.WriteString("update ")
-		fieldEscape(&sb, t.Name)
+		fieldEscape(sb, t.Name)
 		sb.WriteString(" set ")
 
 		// 处理SET部分
@@ -897,7 +1096,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						if argCnt > 0 {
 							sb.WriteString(",")
 						}
-						fieldEscape(&sb, field)
+						fieldEscape(sb, field)
 						if s, ok := v.(U); ok {
 							sb.WriteString("=")
 							sb.WriteString(string(s))
@@ -916,7 +1115,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 					if argCnt > 0 {
 						sb.WriteString(",")
 					}
-					fieldEscape(&sb, k)
+					fieldEscape(sb, k)
 					if s, ok := v.(U); ok {
 						sb.WriteString("=")
 						sb.WriteString(string(s))
@@ -930,10 +1129,18 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		} else {
 			// Struct类型处理
 			rt := reflect2.TypeOf(obj)
-			if rt.Kind() != reflect.Ptr {
-				return 0, errors.New("update requires pointer to struct")
+			var objPtr interface{}
+
+			if rt.Kind() == reflect.Ptr {
+				rt = rt.(reflect2.PtrType).Elem()
+				objPtr = obj
+			} else if rt.Kind() == reflect.Struct {
+				// 支持非指针结构体
+				objPtr = reflect2.PtrOf(obj)
+				rt = reflect2.TypeOf(objPtr).(reflect2.PtrType).Elem()
+			} else {
+				return 0, errors.New("update requires struct or pointer to struct")
 			}
-			rt = rt.(reflect2.PtrType).Elem()
 			if rt.Kind() == reflect.Struct {
 				s := rt.(reflect2.StructType)
 				// 如果传入了 Fields(...)，仅更新这些字段，并消费该参数
@@ -945,9 +1152,9 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						if i > 0 {
 							sb.WriteString(",")
 						}
-						fieldEscape(&sb, name)
+						fieldEscape(sb, name)
 						sb.WriteString("=?")
-						val := f.Get(s.PackEFace(reflect2.PtrOf(obj)))
+						val := f.Get(s.PackEFace(reflect2.PtrOf(objPtr)))
 						if f.Type().String() == "time.Time" {
 							if t.Cfg.ToTimestamp {
 								val = val.(*time.Time).UTC().Unix()
@@ -974,12 +1181,12 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 							sb.WriteString(",")
 						}
 						if ft == "" {
-							fieldEscape(&sb, f.Name())
+							fieldEscape(sb, f.Name())
 						} else {
-							fieldEscape(&sb, ft)
+							fieldEscape(sb, ft)
 						}
 						sb.WriteString("=?")
-						val := f.Get(s.PackEFace(reflect2.PtrOf(obj)))
+						val := f.Get(s.PackEFace(reflect2.PtrOf(objPtr)))
 						if f.Type().String() == "time.Time" {
 							if t.Cfg.ToTimestamp {
 								val = val.(*time.Time).UTC().Unix()
@@ -1016,11 +1223,12 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 
 		// 处理Where条件
 		for _, arg := range args {
-			arg.BuildSQL(&sb)
+			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
 
 		item.SQL = sb.String()
+		putSQLBuilder(sb) // 释放字符串构建器
 
 		// 存储到缓存
 		if t.Cfg.Reuse {
@@ -1057,10 +1265,13 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 	}
 
 	var (
-		sb       strings.Builder
 		stmtArgs []interface{}
 		item     *DataBindingItem
 	)
+
+	// 使用池化的参数切片
+	stmtArgs = getArgsSlice()
+	defer putArgsSlice(stmtArgs)
 
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
@@ -1081,15 +1292,17 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 		// 构建SQL
 		item = &DataBindingItem{Type: nil}
 
+		sb := getSQLBuilder()
 		sb.WriteString("delete from ")
-		fieldEscape(&sb, t.Name)
+		fieldEscape(sb, t.Name)
 
 		for _, arg := range args {
-			arg.BuildSQL(&sb)
+			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
 
 		item.SQL = sb.String()
+		putSQLBuilder(sb) // 释放字符串构建器
 
 		// 存储到缓存
 		if t.Cfg.Reuse {
@@ -1139,6 +1352,13 @@ type ZormDBIFace interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+// ZormTxIFace 事务接口
+type ZormTxIFace interface {
+	ZormDBIFace
+	Commit() error
+	Rollback() error
 }
 
 // ZormTable .
@@ -1215,6 +1435,36 @@ func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]refl
 	}
 }
 
+// isAutoIncrementField 检查字段是否为自增主键
+func isAutoIncrementField(f reflect2.StructField) bool {
+	ft := f.Tag().Get("zorm")
+	if ft == "" {
+		return false
+	}
+
+	// 解析 tag，只支持最简洁的格式：
+	// zorm:"id,auto_incr" - 自增主键
+	tags := strings.Split(ft, ",")
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "auto_incr" {
+			return true
+		}
+	}
+	return false
+}
+
+// getAutoIncrementField 获取自增主键字段
+func (t *ZormTable) getAutoIncrementField(s reflect2.StructType) reflect2.StructField {
+	for i := 0; i < s.NumField(); i++ {
+		f := s.Field(i)
+		if isAutoIncrementField(f) {
+			return f
+		}
+	}
+	return nil
+}
+
 // collectFieldsForInsert 收集字段用于INSERT操作，支持embedded struct
 func (t *ZormTable) collectFieldsForInsert(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField) {
 	t.collectFieldsForInsertWithPrefix(s, sb, cols, "")
@@ -1228,6 +1478,11 @@ func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *
 
 		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
+			continue
+		}
+
+		// 忽略自增主键字段
+		if isAutoIncrementField(f) {
 			continue
 		}
 
@@ -1256,7 +1511,9 @@ func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *
 		if ft == "" {
 			fieldEscape(sb, fieldName)
 		} else {
-			fieldEscape(sb, ft)
+			// 只使用字段名部分，忽略其他标签
+			fieldNameFromTag := strings.Split(ft, ",")[0]
+			fieldEscape(sb, fieldNameFromTag)
 		}
 
 		*cols = append(*cols, f)
@@ -1439,7 +1696,11 @@ func (w *fieldsItem) BuildSQL(sb *strings.Builder) {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		fieldEscape(sb, field)
+		if field == "*" {
+			sb.WriteString("*")
+		} else {
+			fieldEscape(sb, field)
+		}
 	}
 }
 
@@ -1464,7 +1725,10 @@ func (w *onConflictDoUpdateSetItem) BuildArgs(stmtArgs *[]interface{}) {
 }
 
 type joinItem struct {
-	Stmt string
+	Stmt     string        // 原始语句（向后兼容）
+	JoinType string        // 连接类型：LEFT JOIN, RIGHT JOIN, INNER JOIN, FULL OUTER JOIN
+	Table    string        // 表名
+	On       []interface{} // ON 条件
 }
 
 func (w *joinItem) Type() int {
@@ -1473,10 +1737,68 @@ func (w *joinItem) Type() int {
 
 func (w *joinItem) BuildSQL(sb *strings.Builder) {
 	sb.WriteString(" ")
-	sb.WriteString(w.Stmt)
+
+	// 如果有原始语句，直接使用（向后兼容）
+	if w.Stmt != "" {
+		sb.WriteString(w.Stmt)
+		return
+	}
+
+	// 构建新的联表查询语句
+	if w.JoinType != "" && w.Table != "" {
+		sb.WriteString(w.JoinType)
+		sb.WriteString(" ")
+		fieldEscape(sb, w.Table)
+
+		if len(w.On) > 0 {
+			sb.WriteString(" ON ")
+			// 构建 ON 条件，类似 Where 的处理方式
+			if s, ok := w.On[0].(string); ok {
+				// 字符串格式：直接使用
+				sb.WriteString(s)
+			} else {
+				// 条件对象格式：使用类似 Where 的处理
+				for i, cond := range w.On {
+					if i > 0 {
+						sb.WriteString(" AND ")
+					}
+					if condEx, ok := cond.(*ormCondEx); ok {
+						if len(condEx.Conds) > 1 {
+							sb.WriteString("(")
+						}
+						condEx.BuildSQL(sb)
+						if len(condEx.Conds) > 1 {
+							sb.WriteString(")")
+						}
+					} else if cond, ok := cond.(*ormCond); ok {
+						cond.BuildSQL(sb)
+					}
+				}
+			}
+		}
+	}
 }
 
-func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {}
+func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {
+	// 处理 ON 条件中的参数
+	if len(w.On) > 0 {
+		if _, ok := w.On[0].(string); ok {
+			// 字符串格式：检查是否有占位符参数
+			if len(w.On) > 1 {
+				*stmtArgs = append(*stmtArgs, w.On[1:]...)
+			}
+		} else {
+			// 条件对象格式：处理条件中的参数
+			for _, cond := range w.On {
+				if condEx, ok := cond.(*ormCondEx); ok {
+					condEx.BuildArgs(stmtArgs)
+				} else if cond, ok := cond.(*ormCond); ok {
+					cond.BuildArgs(stmtArgs)
+				}
+			}
+		}
+	}
+}
 
 type indexedByItem struct {
 	idx string
@@ -2310,10 +2632,478 @@ var (
 			return &strings.Builder{}
 		},
 	}
+	// 字符串构建器池，用于SQL构建
+	_sqlBuilderPool = sync.Pool{
+		New: func() interface{} {
+			return &strings.Builder{}
+		},
+	}
+	// 参数切片池，减少slice分配
+	_argsPool = sync.Pool{
+		New: func() interface{} {
+			return make([]interface{}, 0, 16)
+		},
+	}
 )
 
 type CallSite struct {
 	File string
 	Line int
 	Key  string
+}
+
+// getSQLBuilder 从池中获取字符串构建器
+func getSQLBuilder() *strings.Builder {
+	return _sqlBuilderPool.Get().(*strings.Builder)
+}
+
+// putSQLBuilder 将字符串构建器放回池中
+func putSQLBuilder(sb *strings.Builder) {
+	sb.Reset()
+	_sqlBuilderPool.Put(sb)
+}
+
+// getArgsSlice 从池中获取参数切片
+func getArgsSlice() []interface{} {
+	return _argsPool.Get().([]interface{})
+}
+
+// putArgsSlice 将参数切片放回池中
+func putArgsSlice(args []interface{}) {
+	// 清空切片但保留容量
+	args = args[:0]
+	_argsPool.Put(args)
+}
+
+// Begin 开始事务
+func Begin(db ZormDBIFace) (ZormTxIFace, error) {
+	if txDB, ok := db.(interface {
+		Begin() (*sql.Tx, error)
+	}); ok {
+		tx, err := txDB.Begin()
+		if err != nil {
+			return nil, err
+		}
+		return &ZormTx{tx: tx}, nil
+	}
+	return nil, errors.New("database does not support transactions")
+}
+
+// BeginContext 带上下文开始事务
+func BeginContext(ctx context.Context, db ZormDBIFace) (ZormTxIFace, error) {
+	if txDB, ok := db.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
+		tx, err := txDB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &ZormTx{tx: tx}, nil
+	}
+	return nil, errors.New("database does not support transactions")
+}
+
+// ZormTx 事务实现
+type ZormTx struct {
+	tx *sql.Tx
+}
+
+// QueryRowContext 实现 ZormDBIFace 接口
+func (tx *ZormTx) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return tx.tx.QueryRowContext(ctx, query, args...)
+}
+
+// QueryContext 实现 ZormDBIFace 接口
+func (tx *ZormTx) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return tx.tx.QueryContext(ctx, query, args...)
+}
+
+// ExecContext 实现 ZormDBIFace 接口
+func (tx *ZormTx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return tx.tx.ExecContext(ctx, query, args...)
+}
+
+// Commit 提交事务
+func (tx *ZormTx) Commit() error {
+	return tx.tx.Commit()
+}
+
+// Rollback 回滚事务
+func (tx *ZormTx) Rollback() error {
+	return tx.tx.Rollback()
+}
+
+// ConnectionPool 连接池配置
+type ConnectionPool struct {
+	MaxOpenConns    int           // 最大打开连接数
+	MaxIdleConns    int           // 最大空闲连接数
+	ConnMaxLifetime time.Duration // 连接最大生存时间
+	ConnMaxIdleTime time.Duration // 连接最大空闲时间
+}
+
+// SetConnectionPool 设置连接池
+func SetConnectionPool(db *sql.DB, pool *ConnectionPool) {
+	if pool.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(pool.MaxOpenConns)
+	}
+	if pool.MaxIdleConns > 0 {
+		db.SetMaxIdleConns(pool.MaxIdleConns)
+	}
+	if pool.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(pool.ConnMaxLifetime)
+	}
+	if pool.ConnMaxIdleTime > 0 {
+		db.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
+	}
+}
+
+// DefaultConnectionPool 默认连接池配置
+func DefaultConnectionPool() *ConnectionPool {
+	return &ConnectionPool{
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: 5 * time.Minute,
+		ConnMaxIdleTime: 1 * time.Minute,
+	}
+}
+
+// ReadWriteDB 读写分离数据库
+type ReadWriteDB struct {
+	Master ZormDBIFace   // 主库（写）
+	Slaves []ZormDBIFace // 从库（读）
+	index  int64         // 轮询索引
+}
+
+// DDLConfig DDL configuration
+type DDLConfig struct {
+	Engine      string // Storage engine, e.g., InnoDB
+	Charset     string // Character set, e.g., utf8mb4
+	Collate     string // Collation, e.g., utf8mb4_unicode_ci
+	AutoMigrate bool   // Whether to enable auto migration
+}
+
+// DefaultDDLConfig returns default DDL configuration
+func DefaultDDLConfig() *DDLConfig {
+	return &DDLConfig{
+		Engine:      "InnoDB",
+		Charset:     "utf8mb4",
+		Collate:     "utf8mb4_unicode_ci",
+		AutoMigrate: true,
+	}
+}
+
+// NewReadWriteDB 创建读写分离数据库
+func NewReadWriteDB(master ZormDBIFace, slaves ...ZormDBIFace) *ReadWriteDB {
+	return &ReadWriteDB{
+		Master: master,
+		Slaves: slaves,
+		index:  0,
+	}
+}
+
+// QueryRowContext 实现 ZormDBIFace 接口（读操作使用从库）
+func (rw *ReadWriteDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	if len(rw.Slaves) == 0 {
+		return rw.Master.QueryRowContext(ctx, query, args...)
+	}
+
+	// 轮询选择从库
+	slave := rw.Slaves[rw.index%int64(len(rw.Slaves))]
+	atomic.AddInt64(&rw.index, 1)
+	return slave.QueryRowContext(ctx, query, args...)
+}
+
+// QueryContext 实现 ZormDBIFace 接口（读操作使用从库）
+func (rw *ReadWriteDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	if len(rw.Slaves) == 0 {
+		return rw.Master.QueryContext(ctx, query, args...)
+	}
+
+	// 轮询选择从库
+	slave := rw.Slaves[rw.index%int64(len(rw.Slaves))]
+	atomic.AddInt64(&rw.index, 1)
+	return slave.QueryContext(ctx, query, args...)
+}
+
+// ExecContext 实现 ZormDBIFace 接口（写操作使用主库）
+func (rw *ReadWriteDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return rw.Master.ExecContext(ctx, query, args...)
+}
+
+// CreateTable creates a table from struct definition
+func CreateTable(db ZormDBIFace, tableName string, model interface{}, config *DDLConfig) error {
+	if config == nil {
+		config = DefaultDDLConfig()
+	}
+
+	sql, err := generateCreateTableSQL(tableName, model, config)
+	if err != nil {
+		return err
+	}
+
+	// Debug: print generated SQL (remove in production)
+	// fmt.Printf("Generated SQL: %s\n", sql)
+
+	_, err = db.ExecContext(context.Background(), sql)
+	return err
+}
+
+// AutoMigrate automatically migrates table schemas
+func AutoMigrate(db ZormDBIFace, models ...interface{}) error {
+	for _, model := range models {
+		tableName := getTableName(model)
+		if err := autoMigrateTable(db, tableName, model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DropTable drops a table if it exists
+func DropTable(db ZormDBIFace, tableName string) error {
+	sql := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", tableName)
+	_, err := db.ExecContext(context.Background(), sql)
+	return err
+}
+
+// TableExists checks if a table exists
+// Priority: SQLite implementation first, MySQL as fallback
+func TableExists(db ZormDBIFace, tableName string) (bool, error) {
+	var count int
+
+	// Try SQLite first (most common for zorm)
+	err := db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&count)
+	if err == nil {
+		return count > 0, nil
+	}
+
+	// Fallback to MySQL/PostgreSQL
+	err = db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?", tableName).Scan(&count)
+	if err != nil {
+		// Try PostgreSQL as second fallback
+		err = db.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1", tableName).Scan(&count)
+	}
+
+	return count > 0, err
+}
+
+// generateCreateTableSQL generates CREATE TABLE SQL from struct definition
+func generateCreateTableSQL(tableName string, model interface{}, config *DDLConfig) (string, error) {
+	rt := reflect2.TypeOf(model)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.(reflect2.PtrType).Elem()
+	}
+
+	if rt.Kind() != reflect.Struct {
+		return "", errors.New("model must be a struct")
+	}
+
+	s := rt.(reflect2.StructType)
+	sb := getSQLBuilder()
+	defer putSQLBuilder(sb)
+
+	sb.WriteString("CREATE TABLE IF NOT EXISTS `")
+	sb.WriteString(tableName)
+	sb.WriteString("` (")
+
+	first := true
+	for i := 0; i < s.NumField(); i++ {
+		f := s.Field(i)
+		ft := f.Tag().Get("zorm")
+
+		// Skip fields with zorm tag "-"
+		if ft == "-" {
+			continue
+		}
+
+		if !first {
+			sb.WriteString(",")
+		}
+		first = false
+
+		// Field name
+		fieldName := f.Name()
+		if ft != "" {
+			fieldName = strings.Split(ft, ",")[0]
+		}
+		sb.WriteString("\n  `")
+		sb.WriteString(fieldName)
+		sb.WriteString("` ")
+
+		// Auto-increment primary key needs special handling
+		if isAutoIncrementField(f) {
+			sb.WriteString("INTEGER PRIMARY KEY AUTOINCREMENT")
+		} else {
+			// Field type
+			fieldType := getSQLType(f.Type())
+			sb.WriteString(fieldType)
+		}
+
+		// NOT NULL
+		if !isNullable(f) {
+			sb.WriteString(" NOT NULL")
+		}
+
+		// Default value (auto-increment fields don't need default values)
+		if !isAutoIncrementField(f) {
+			if defaultValue := getDefaultValue(f); defaultValue != "" {
+				sb.WriteString(" DEFAULT ")
+				sb.WriteString(defaultValue)
+			}
+		}
+	}
+
+	sb.WriteString("\n)")
+
+	// Add table options (MySQL fallback, SQLite ignores these)
+	// SQLite is prioritized, MySQL options are added for compatibility
+	if config.Engine != "" {
+		sb.WriteString(" ENGINE=")
+		sb.WriteString(config.Engine)
+	}
+	if config.Charset != "" {
+		sb.WriteString(" DEFAULT CHARSET=")
+		sb.WriteString(config.Charset)
+	}
+	if config.Collate != "" {
+		sb.WriteString(" COLLATE=")
+		sb.WriteString(config.Collate)
+	}
+
+	return sb.String(), nil
+}
+
+// getTableName extracts table name from struct type
+func getTableName(model interface{}) string {
+	rt := reflect2.TypeOf(model)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.(reflect2.PtrType).Elem()
+	}
+
+	// Try to get table name from struct name
+	name := rt.String()
+	if name == "" {
+		return "table"
+	}
+
+	// Extract struct name from full type name
+	parts := strings.Split(name, ".")
+	if len(parts) > 0 {
+		name = parts[len(parts)-1]
+	}
+
+	// Simple pluralization (can be extended)
+	return strings.ToLower(name) + "s"
+}
+
+// autoMigrateTable automatically migrates a single table
+func autoMigrateTable(db ZormDBIFace, tableName string, model interface{}) error {
+	// Check if table exists
+	exists, err := TableExists(db, tableName)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		// Table doesn't exist, create it
+		return CreateTable(db, tableName, model, DefaultDDLConfig())
+	}
+
+	// Table exists, check if fields need to be added
+	// More complex migration logic can be implemented here
+	// Currently only does simple table creation
+	return nil
+}
+
+// getSQLType maps Go types to SQL types
+// Optimized for SQLite, compatible with MySQL/PostgreSQL
+func getSQLType(rt reflect2.Type) string {
+	switch rt.Kind() {
+	case reflect.Bool:
+		return "BOOLEAN"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
+		return "INTEGER"
+	case reflect.Int64:
+		return "BIGINT"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return "INTEGER UNSIGNED"
+	case reflect.Uint64:
+		return "BIGINT UNSIGNED"
+	case reflect.Float32:
+		return "FLOAT"
+	case reflect.Float64:
+		return "DOUBLE"
+	case reflect.String:
+		return "TEXT"
+	case reflect.Slice:
+		if rt.(reflect2.SliceType).Elem().Kind() == reflect.Uint8 {
+			return "BLOB"
+		}
+		return "TEXT"
+	default:
+		if rt.String() == "time.Time" {
+			return "DATETIME"
+		}
+		return "TEXT"
+	}
+}
+
+// isNullable checks if a field can be null
+func isNullable(f reflect2.StructField) bool {
+	ft := f.Tag().Get("zorm")
+	if ft == "" {
+		return true
+	}
+
+	tags := strings.Split(ft, ",")
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "not_null" || tag == "notnull" {
+			return false
+		}
+	}
+
+	// Determine based on Go type
+	switch f.Type().Kind() {
+	case reflect.Ptr, reflect.Slice, reflect.Map, reflect.Interface:
+		return true
+	default:
+		return false
+	}
+}
+
+// getDefaultValue gets the default value for a field
+func getDefaultValue(f reflect2.StructField) string {
+	ft := f.Tag().Get("zorm")
+	if ft == "" {
+		return ""
+	}
+
+	tags := strings.Split(ft, ",")
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if strings.HasPrefix(tag, "default:") {
+			return strings.TrimPrefix(tag, "default:")
+		}
+	}
+
+	// Set default value based on type
+	switch f.Type().Kind() {
+	case reflect.String:
+		return "'default'"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "0"
+	case reflect.Float32, reflect.Float64:
+		return "0.0"
+	case reflect.Bool:
+		return "0"
+	default:
+		if f.Type().String() == "time.Time" {
+			return "CURRENT_TIMESTAMP"
+		}
+		return ""
+	}
 }
