@@ -850,14 +850,6 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 - **Effect**: Zero use of `ValueOf`, avoid performance issues
 - **Advantage**: Faster type checking and field access
 
-# TODO
-
-- Insert/Update support non-pointer types
-- Transaction support
-- Join queries
-- Connection pool
-- Read-write separation
-
 ## Contributors
 
 The existence of this project is thanks to all contributors.
