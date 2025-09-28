@@ -653,7 +653,7 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 - Connection pool
 - Read-write separation
 
-- ## Contributors
+## Contributors
 
 The existence of this project is thanks to all contributors.
 
