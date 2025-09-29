@@ -29,7 +29,7 @@
 - **原子DDL**：创建、修改、删除表的原子操作
 - **模式管理**：数据库表结构管理和验证
 
-## 🔄 完整CRUD操作与监控
+## 🛠️ 完整CRUD操作与监控
 - **一行操作**：简单的Insert、Update、Select、Delete API
 - **事务支持**：内置事务管理，支持上下文
 - **联表查询**：高级JOIN操作，灵活的ON条件
@@ -454,6 +454,19 @@
 
    // 链式多个选项
    n, err = t.Debug().Audit(auditLogger, telemetryCollector).Insert(&o)
+
+   // 使用链式方法启用审计
+   userTable := zorm.Table(db, "users").Audit(nil, nil) // 使用默认日志记录器
+
+   // 或使用自定义日志记录器
+   auditLogger := zorm.NewJSONAuditLogger()
+   telemetryCollector := zorm.NewDefaultTelemetryCollector()
+   userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
+
+   // 链式多个选项
+   advancedTable := zorm.Table(db, "users").
+      Debug().           // 启用调试模式
+      Audit(nil, nil)    // 启用审计日志
    ```
 
 ### Where
@@ -598,43 +611,6 @@
    // 检查是否全部命中
    err = z.ZormMockFinish()
    So(err, ShouldBeNil)
-```
-
-### 🔍 调试、复用与审计功能
-
-#### 调试模式
-```go
-// 启用调试模式打印SQL语句
-userTable := zorm.Table(db, "users").Debug()
-n, err := userTable.Insert(&user)
-```
-
-#### 复用优化（默认开启）
-```go
-// 复用功能默认开启 - 无需配置
-// 通过智能缓存提供2-14倍性能提升
-userTable := zorm.Table(db, "users")
-n, err := userTable.Insert(&user) // 首次调用构建缓存
-n, err = userTable.Insert(&user2) // 后续调用复用SQL/元数据
-
-// 如需关闭（不推荐）
-n, err = userTable.NoReuse().Insert(&user)
-```
-
-#### 审计日志
-```go
-// 使用链式方法启用审计
-userTable := zorm.Table(db, "users").Audit(nil, nil) // 使用默认日志器
-
-// 或使用自定义日志器
-auditLogger := zorm.NewJSONAuditLogger()
-telemetryCollector := zorm.NewDefaultTelemetryCollector()
-userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
-
-// 链式多个选项
-advancedTable := zorm.Table(db, "users").
-    Debug().           // 启用调试模式
-    Audit(nil, nil)    // 启用审计日志
 ```
 
 #### 性能监控
