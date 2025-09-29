@@ -209,8 +209,8 @@ func main() {
 	// Example 6: Show telemetry metrics
 	fmt.Println("\n6. Telemetry metrics:")
 	// Create auditableDB instance to get telemetry metrics
-	auditableDB := zorm.NewAuditableDB(db, auditLogger, telemetryCollector)
-	metrics := auditableDB.GetTelemetryMetrics()
+	auditableDBForMetrics := zorm.NewAuditableDB(db, auditLogger, telemetryCollector)
+	metrics := auditableDBForMetrics.GetTelemetryMetrics()
 	for key, value := range metrics {
 		fmt.Printf("  %s: %v\n", key, value)
 	}
