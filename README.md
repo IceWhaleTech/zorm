@@ -593,13 +593,39 @@ Option usage example:
 - Last three parameters are `return data`, `return affected rows` and `error`
 - Can only be used in test files
 
+### Usage example:
 
+Function to test:
 
-**⚠️ Experimental Feature Warning:**
-- This feature is under active development
-- API may change in future versions
-- Use with caution in production environments
-- Feedback and contributions are welcome
+```golang
+   package x
+
+   func test(db *sql.DB) (X, int, error) {
+      var o X
+      tbl := z.Table(db, "tbl")
+      n, err := tbl.Select(&o, z.Where("`id` >= ?", 1), z.Limit(100))
+      return o, n, err
+   }
+```
+
+In the `x.test` method querying `tbl` data, we need to mock database operations
+
+``` golang
+   // Must set mock in _test.go file
+   // Note caller method name needs to include package name
+   z.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
+
+   // Call the function under test
+   o1, n1, err := test(db)
+
+   So(err, ShouldBeNil)
+   So(n1, ShouldEqual, 1)
+   So(o1, ShouldResemble, o)
+
+   // Check if all hits
+   err = z.ZormMockFinish()
+   So(err, ShouldBeNil)
+```
 
 ### 🔍 Debug, Reuse & Audit Features
 
@@ -651,41 +677,6 @@ All operations are automatically monitored with telemetry data:
 - `zorm:"auto_incr"` - Use converted field name with auto-increment
 - `zorm:"-"` - Ignore field
 - No tag - Auto-convert camelCase to snake_case
-
-
-### Usage example:
-
-Function to test:
-
-```golang
-   package x
-
-   func test(db *sql.DB) (X, int, error) {
-      var o X
-      tbl := z.Table(db, "tbl")
-      n, err := tbl.Select(&o, z.Where("`id` >= ?", 1), z.Limit(100))
-      return o, n, err
-   }
-```
-
-In the `x.test` method querying `tbl` data, we need to mock database operations
-
-``` golang
-   // Must set mock in _test.go file
-   // Note caller method name needs to include package name
-   z.ZormMock("tbl", "Select", "*.test", "", "", &o, 1, nil)
-
-   // Call the function under test
-   o1, n1, err := test(db)
-
-   So(err, ShouldBeNil)
-   So(n1, ShouldEqual, 1)
-   So(o1, ShouldResemble, o)
-
-   // Check if all hits
-   err = z.ZormMockFinish()
-   So(err, ShouldBeNil)
-```
 
 # Performance Test Results
 
