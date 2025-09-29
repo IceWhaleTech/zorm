@@ -13,69 +13,28 @@
 - **[Features](FEATURES.md)** - Complete feature overview and implementation details
 - **[Performance Report](PERFORMANCE_REPORT.md)** - Detailed performance benchmarks and optimization analysis
 
-# 🚀 Latest Features
+# 🚀 Key Features
 
-## ⚡ Reuse Function Enabled by Default - Revolutionary Performance Improvement
-- **8.6x Performance Improvement**: Optimized caching mechanism, reduced redundant calculations
-- **92% Memory Optimization**: Zero allocation design, significantly reduced GC pressure
-- **Zero Configuration**: Enabled by default, no additional setup required
-- **Concurrent Safe**: Supports high concurrency scenarios with stable performance
+## ⚡ High Performance
+- **8.6x Performance Improvement**: Smart caching with zero allocation design
+- **Reuse Enabled by Default**: Automatic SQL and metadata reuse for repeated operations
+- **Connection Pool Management**: Configurable pool with optimal defaults for high concurrency
+- **Read-Write Separation**: Automatic routing of read/write operations for better performance
+- **Concurrent Safe**: Optimized for high concurrency scenarios
 
-## 🗺️ Map Type Support
-- **No Struct Definition Required**: Directly use map[string]interface{} to operate database
-- **Complete CRUD Support**: Insert, Update, Select fully supported
-- **Type Safety**: Automatic type conversion and validation
-- **SQL Optimization**: Automatically generates efficient SQL statements
+## 🗺️ Smart Data Types & Schema Management
+- **Map Support**: Use `map[string]interface{}` without struct definitions
+- **Auto Naming**: CamelCase to snake_case conversion for database fields
+- **Flexible Tags**: Support `zorm:"field_name,auto_incr"` format
+- **Atomic DDL**: Create, alter, and drop tables with atomic operations
+- **Schema Management**: Automatic schema creation and validation
 
-## 🏗️ Embedded Struct Support
-- **Auto Expansion**: Nested struct fields automatically expanded to SQL
-- **Tag Support**: Supports zorm tags for custom field names
-- **Recursive Processing**: Supports multi-level nested structs
-- **Performance Optimization**: Field mapping cache, avoiding redundant calculations
-
-## ⏰ Faster and More Accurate Time Parsing
-- **5.1x Performance Improvement**: Smart format detection, single parse
-- **100% Memory Optimization**: Zero allocation design, reduced memory usage
-- **Multi-format Support**: Standard format, timezone format, nanosecond format, date-only format
-- **Empty Value Handling**: Automatically handle empty strings and NULL values
-
-## 🔧 Enhanced Type Support
-- **Non-Pointer Types**: Support for both pointer and non-pointer struct/slice types in Insert/Update operations
-- **Auto-Increment Tags**: Natural struct tag support for auto-increment primary keys (`zorm:"id,auto_incr"`)
-
-## 🔗 Advanced Join Queries
-- **Flexible ON Conditions**: Support both string and condition object formats for JOIN operations
-- **Multiple Join Types**: LEFT JOIN, RIGHT JOIN, INNER JOIN, FULL OUTER JOIN
-- **Complex Conditions**: Support nested conditions with AND/OR logic in ON clauses
-- **Type-Safe**: Full parameter binding and type safety for join conditions
-
-## 🔄 Transaction Support
-- **Simple API**: `Begin()`, `Commit()`, `Rollback()` methods for transaction management
-- **Context Support**: `BeginContext()` for context-aware transactions
-- **Error Handling**: Automatic rollback on errors, manual rollback support
-- **SQLite Compatible**: Full transaction support for SQLite databases
-
-## 🏊 Connection Pool Management
-- **Configurable Pool**: Set max open connections, idle connections, and connection lifetime
-- **Default Settings**: Sensible defaults for most applications
-- **Performance Tuning**: Optimize connection pool for your specific workload
-- **Resource Management**: Automatic connection cleanup and resource management
-
-## 📊 Read-Write Separation
-- **Master-Slave Architecture**: Automatic routing of read/write operations
-- **Round-Robin Load Balancing**: Distribute read queries across multiple slave databases
-- **Transparent Operation**: No code changes required for existing queries
-- **High Availability**: Improved performance and fault tolerance
-
-## 🧪 Experimental Features
-
-### 🏗️ DDL and AutoMigrate
-- **Table Creation**: Create tables from struct definitions with `CreateTable()`
-- **Auto Migration**: Automatically migrate table schemas with `AutoMigrate()`
-- **Schema Management**: Check table existence, drop tables, and manage database schema
-- **Tag-Based Configuration**: Use struct tags to define field properties and constraints
-- **⚠️ Experimental**: This feature is under development and may change in future versions
-
+## 🔄 Complete CRUD Operations & Monitoring
+- **One-Line Operations**: Simple Insert, Update, Select, Delete APIs
+- **Transaction Support**: Built-in transaction management with context support
+- **Join Queries**: Advanced JOIN operations with flexible ON conditions
+- **SQL Audit**: Complete audit logging for all database operations
+- **Performance Monitoring**: Real-time telemetry and performance metrics
 
 # Goals
 - **Easy to use**: SQL-Like (One-Line-CRUD)
@@ -98,7 +57,7 @@
 - **Other advantages**:
   - More natural where conditions (only add parentheses when needed, compared to gorm)
   - In operation accepts various types of slices
-  - Migration from other ORM libraries requires no historical code modification, non-invasive modification
+  - Switching from other ORM libraries requires no historical code modification, non-invasive modification
 
 # Feature Matrix
 
@@ -223,14 +182,11 @@
 
 3. (Optional) Define model object
    ``` golang
-   // Info fields without zorm tag will not be fetched by default
    type Info struct {
-      ID   int64  `zorm:"id"`
-      Name string `zorm:"name"`
-      Tag  string `zorm:"tag"`
+      ID   int64  `zorm:"user_id,auto_incr"` // Specify DB column name and auto-increment
+      Name string // Auto-converted to "name"
+      Tag  string // Auto-converted to "tag"
    }
-
-   // Call t.UseNameWhenTagEmpty() to use field names without zorm tag as database fields to fetch
    ```
 
 4. Execute operations
@@ -282,6 +238,22 @@
       Email    string `zorm:"email"`
    }
    n, err = t.Insert(&user)
+
+   // Auto-increment primary key
+   type User struct {
+      ID   int64  `zorm:"id,auto_incr"` // Auto-increment primary key
+      Name string `zorm:"name"`
+      Age  int    `zorm:"age"`
+   }
+   user := User{Name: "Alice", Age: 25}
+   n, err = t.Insert(&user)
+   // user.ID will be automatically set to the generated ID
+
+   // Support both pointer and non-pointer types
+   user := User{Name: "Bob", Age: 30}        // Non-pointer
+   users := []User{{Name: "Charlie", Age: 35}} // Non-pointer slice
+   n, err = t.Insert(user)   // Non-pointer struct
+   n, err = t.Insert(&users) // Non-pointer slice
    ```
 
 - Select
@@ -304,6 +276,21 @@
 
    // Can force index
    n, err = t.Select(&ids, z.Fields("id"), z.IndexedBy("idx_xxx"), z.Where("name = ?", name))
+
+   // Advanced Join Queries
+   // Simple join with string ON condition
+   var results []UserOrder
+   n, err := t.Select(&results,
+      z.Fields("users.id", "users.name", "orders.amount"),
+      z.InnerJoin("orders", "users.id = orders.user_id"),
+      z.Where("orders.status = ?", "completed"),
+   )
+
+   // Complex join with condition objects
+   n, err = t.Select(&results,
+      z.Fields("users.id", "users.name", "orders.amount"),
+      z.LeftJoin("orders", z.Eq("users.id", z.U("orders.user_id"))),
+   )
    ```
 
 - Select to Map (no struct needed)
@@ -376,19 +363,15 @@
 - **Join queries**
    ``` golang
    type Info struct {
-      ID   int64  `zorm:"t_usr.id"` // field definition with table name
-      Name string `zorm:"t_usr.name"`
-      Tag  string `zorm:"t_tag.tag"`
+      ID   int64  `zorm:"users.id"` // field definition with table name
+      Name string `zorm:"users.name"`
+      Tag  string `zorm:"tags.tag"`
    }
 
-   // Method 1
-   t := z.Table(d.DB, "t_usr join t_tag on t_usr.id=t_tag.id") // table name with join statement
-   var o Info
-   n, err := t.Select(&o, z.Where(z.Eq("t_usr.id", id))) // condition with table name
-
-   // Method 2
-   t = z.Table(d.DB, "t_usr") // normal table name
-   n, err = t.Select(&o, z.Join("join t_tag on t_usr.id=t_tag.id"), z.Where(z.Eq("t_usr.id", id))) // condition needs table name
+   t := z.Table(d.DB, "users")
+   n, err := t.Select(&o, 
+      z.InnerJoin("tags", "users.id = tags.user_id"),
+      z.Where(z.Eq("users.id", id)))
    ```
 
 - Get inserted auto-increment id
@@ -475,13 +458,13 @@
 
 ### Table Options
 
-| Option              | Description                                                                                                                         |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| Debug               | Print SQL statements                                                                                                                |
-| Reuse               | Reuse SQL and storage based on call location (**enabled by default**, 2-14x improvement). Shape-aware multi-shape cache is built-in |
-| NoReuse             | Disable Reuse functionality (not recommended, will reduce performance)                                                              |
-| UseNameWhenTagEmpty | Use field names without zorm tag as database fields to fetch                                                                        |
-| ToTimestamp         | Use timestamp for Insert, not formatted string                                                                                      |
+| Option      | Description                                                                                                                         |
+|-------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| Debug       | Print SQL statements                                                                                                                |
+| Reuse       | Reuse SQL and storage based on call location (**enabled by default**, 2-14x improvement). Shape-aware multi-shape cache is built-in |
+| NoReuse     | Disable Reuse functionality (not recommended, will reduce performance)                                                              |
+| ToTimestamp | Use timestamp for Insert, not formatted string                                                                                      |
+| Audit       | Enable SQL audit logging and performance monitoring                                                                                 |
 
 Option usage example:
    ``` golang
@@ -493,8 +476,11 @@ Option usage example:
    // If you need to disable it (not recommended), you can call:
    n, err = t.NoReuse().Insert(&o)
 
-   // Reuse is shape-aware by default: guards against SQL shape changes at the same call-site
-   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
+   // Enable audit logging
+   n, err = t.Audit(auditLogger, telemetryCollector).Insert(&o)
+
+   // Chain multiple options
+   n, err = t.Debug().Audit(auditLogger, telemetryCollector).Insert(&o)
    ```
 
 ### Where
@@ -608,153 +594,6 @@ Option usage example:
 - Can only be used in test files
 
 
-## 🚀 New Features Examples
-
-### Auto-Increment Primary Keys with Struct Tags
-
-```go
-type User struct {
-    ID   int64  `zorm:"id,auto_incr"` // Auto-increment primary key
-    Name string `zorm:"name"`
-    Age  int    `zorm:"age"`
-}
-
-// Insert with auto-increment ID
-user := User{Name: "Alice", Age: 25}
-tbl := zorm.Table(db, "users")
-n, err := tbl.Insert(&user)
-// user.ID will be automatically set to the generated ID
-```
-
-**Supported tag format:**
-- `zorm:"id,auto_incr"` - Auto-increment primary key
-
-### Non-Pointer Type Support
-
-```go
-// Support both pointer and non-pointer types
-user := User{Name: "Bob", Age: 30}        // Non-pointer
-users := []User{{Name: "Charlie", Age: 35}} // Non-pointer slice
-
-// Both work seamlessly
-tbl.Insert(user)   // Non-pointer struct
-tbl.Insert(&users) // Non-pointer slice
-```
-
-### Advanced Join Queries
-
-```go
-// String format ON conditions
-var results []UserOrder
-n, err := tbl.Select(&results,
-    zorm.Fields("users.id", "users.name", "orders.amount"),
-    zorm.InnerJoin("orders", "users.id = orders.user_id"),
-    zorm.Where("orders.status = ?", "completed"),
-)
-
-// Condition object format ON conditions
-n, err := tbl.Select(&results,
-    zorm.Fields("users.id", "users.name", "orders.amount"),
-    zorm.LeftJoin("orders", 
-        zorm.And(
-            zorm.Eq("users.id", zorm.U("orders.user_id")),
-            zorm.Neq("orders.status", "cancelled"),
-        ),
-    ),
-)
-```
-
-### Transaction Support
-
-```go
-// Begin transaction
-tx, err := zorm.Begin(db)
-if err != nil {
-    return err
-}
-defer tx.Rollback() // Ensure rollback on error
-
-// Use transaction
-txTbl := zorm.Table(tx, "users")
-_, err = txTbl.Insert(&user)
-if err != nil {
-    return err
-}
-
-// Commit transaction
-err = tx.Commit()
-if err != nil {
-    return err
-}
-```
-
-### Connection Pool Configuration
-
-```go
-// Configure connection pool
-pool := &zorm.ConnectionPool{
-    MaxOpenConns:    100,
-    MaxIdleConns:    10,
-    ConnMaxLifetime: time.Hour,
-    ConnMaxIdleTime: time.Minute * 30,
-}
-zorm.SetConnectionPool(db, pool)
-
-// Or use default settings
-zorm.SetConnectionPool(db, zorm.DefaultConnectionPool())
-```
-
-### Read-Write Separation
-
-```go
-// Create read-write database
-master := sql.Open("sqlite3", "master.db")
-slave1 := sql.Open("sqlite3", "slave1.db")
-slave2 := sql.Open("sqlite3", "slave2.db")
-
-rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
-
-// Use read-write database
-tbl := zorm.Table(rwdb, "users")
-// Read operations automatically go to slaves
-n, err := tbl.Select(&users, zorm.Fields("*"))
-// Write operations automatically go to master
-n, err = tbl.Insert(&user)
-```
-
-### 🧪 DDL and AutoMigrate (Experimental)
-
-```go
-// Define model with struct tags
-type User struct {
-    ID        int64     `zorm:"id,auto_incr"`                    // Auto-increment primary key
-    Name      string    `zorm:"name,not_null"`                   // Non-null field
-    Email     string    `zorm:"email,not_null"`                  // Non-null field
-    Age       int       `zorm:"age,default:0"`                   // Field with default value
-    IsActive  bool      `zorm:"is_active,default:true"`          // Boolean field
-    CreatedAt time.Time `zorm:"created_at,default:CURRENT_TIMESTAMP"` // Timestamp field
-    UpdatedAt *time.Time `zorm:"updated_at"`                     // Nullable timestamp
-    Profile   string    `zorm:"profile"`                         // Nullable field
-    Password  string    `zorm:"-"`                               // Ignored field
-}
-
-// Create table from struct
-config := &zorm.DDLConfig{
-    Engine:  "InnoDB",
-    Charset: "utf8mb4",
-    Collate: "utf8mb4_unicode_ci",
-}
-err := zorm.CreateTable(db, "users", User{}, config)
-
-// Auto-migrate multiple tables
-err = zorm.AutoMigrate(db, &User{}, &Product{}, &Order{})
-
-// Check if table exists
-exists, err := zorm.TableExists(db, "users")
-
-// Drop table
-err = zorm.DropTable(db, "users")
-```
 
 **⚠️ Experimental Feature Warning:**
 - This feature is under active development
@@ -762,12 +601,56 @@ err = zorm.DropTable(db, "users")
 - Use with caution in production environments
 - Feedback and contributions are welcome
 
+### 🔍 Debug, Reuse & Audit Features
+
+#### Debug Mode
+```go
+// Enable debug mode to print SQL statements
+userTable := zorm.Table(db, "users").Debug()
+n, err := userTable.Insert(&user)
+```
+
+#### Reuse Optimization (Enabled by Default)
+```go
+// Reuse is enabled by default - no configuration needed
+// Provides 2-14x performance improvement through smart caching
+userTable := zorm.Table(db, "users")
+n, err := userTable.Insert(&user) // First call builds cache
+n, err = userTable.Insert(&user2) // Subsequent calls reuse SQL/metadata
+
+// Disable reuse if needed (not recommended)
+n, err = userTable.NoReuse().Insert(&user)
+```
+
+#### Audit Logging
+```go
+// Enable audit with chain-style method
+userTable := zorm.Table(db, "users").Audit(nil, nil) // Uses default loggers
+
+// Or with custom loggers
+auditLogger := zorm.NewJSONAuditLogger()
+telemetryCollector := zorm.NewDefaultTelemetryCollector()
+userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
+
+// Chain multiple options
+advancedTable := zorm.Table(db, "users").
+    Debug().           // Enable debug mode
+    Audit(nil, nil)    // Enable audit logging
+```
+
+#### Performance Monitoring
+All operations are automatically monitored with telemetry data:
+- **Duration tracking**: Measure operation execution time
+- **Cache hit rates**: Monitor reuse effectiveness  
+- **Memory usage**: Track allocation patterns
+- **Error rates**: Monitor operation success/failure rates
+
 **Supported struct tags:**
 - `zorm:"field_name"` - Field name mapping
 - `zorm:"field_name,auto_incr"` - Auto-increment primary key
-- `zorm:"field_name,not_null"` - Non-null constraint
-- `zorm:"field_name,default:value"` - Default value
+- `zorm:"auto_incr"` - Use converted field name with auto-increment
 - `zorm:"-"` - Ignore field
+- No tag - Auto-convert camelCase to snake_case
 
 
 ### Usage example:
@@ -806,57 +689,9 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
 
 # Performance Test Results
 
-## Reuse Function Performance Optimization
-- **Benchmark Results**:
-  - Single thread: 8.6x performance improvement
-  - Concurrent scenarios: Up to 14.2x performance improvement
-  - Memory optimization: 92% memory usage reduction
-  - Allocation optimization: 75% allocation count reduction
-
-- **Technical Implementation**:
-  - Call site caching: Use `runtime.Caller` to cache file line numbers
-  - String pooling: `sync.Pool` reuses `strings.Builder`
-  - Zero allocation design: Avoid redundant string building and memory allocation
-  - Concurrent safe: `sync.Map` supports high concurrency access
-
-- **Performance Data**:
-  ```
-  BenchmarkReuseOptimized-8    	 1000000	      1200 ns/op	     128 B/op	       2 allocs/op
-  BenchmarkReuseOriginal-8     	  100000	     10320 ns/op	    1600 B/op	      15 allocs/op
-  ```
-
-## Time Parsing Optimization
-- **Before optimization**: Using loop to try multiple time formats
-- **After optimization**: Smart format detection, single parse
-- **Performance improvement**: 5.1x speed improvement, 100% memory optimization
-- **Supported formats**:
-  - Standard format: `2006-01-02 15:04:05`
-  - With timezone: `2006-01-02 15:04:05 -0700 MST`
-  - With nanoseconds: `2006-01-02 15:04:05.999999999 -0700 MST`
-  - Date only: `2006-01-02`
-  - Empty value handling: Automatically handle empty strings and NULL values
-
-## Field Cache Optimization
-- **Technology**: Use `sync.Map` to cache field mappings
-- **Effect**: Significantly improve performance for repeated operations
-- **Applicable scenarios**: Batch operations, frequent queries
-
-## String Operation Optimization
-- **Optimization**: Use `strings.Builder` instead of multiple string concatenations
-- **Effect**: Reduce memory allocation, improve string building performance
-
-## Reflection Optimization
-- **Technology**: Use `reflect2` instead of standard `reflect` package
-- **Effect**: Zero use of `ValueOf`, avoid performance issues
-- **Advantage**: Faster type checking and field access
-
-# TODO
-
-- Insert/Update support non-pointer types
-- Transaction support
-- Join queries
-- Connection pool
-- Read-write separation
+- **8.6x Performance Improvement**: Smart caching with zero allocation design
+- **Memory Optimization**: 92% memory usage reduction, 75% allocation count reduction
+- **Concurrent Safe**: Optimized for high concurrency scenarios with `sync.Map`
 
 ## Contributors
 

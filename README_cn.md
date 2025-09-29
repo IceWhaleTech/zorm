@@ -13,69 +13,28 @@
 - **[功能特性](FEATURES_cn.md)**  - 完整的功能概览和实现细节
 - **[性能报告](PERFORMANCE_REPORT_cn.md)** - 详细的性能基准测试和优化分析
 
-# 🚀 最新功能
+# 🚀 核心特性
 
-## ⚡ Reuse功能默认开启 - 性能革命性提升
-- **8.6倍性能提升**：优化缓存机制，减少重复计算
-- **92%内存优化**：零分配设计，大幅降低GC压力
-- **零配置使用**：默认开启，无需额外设置
-- **并发安全**：支持高并发场景，性能稳定
+## ⚡ 高性能
+- **8.6倍性能提升**：智能缓存与零分配设计
+- **默认开启Reuse**：自动复用SQL和元数据，提升重复操作性能
+- **连接池管理**：可配置连接池，为高并发场景提供最优默认值
+- **读写分离**：自动路由读写操作，提升整体性能
+- **并发安全**：针对高并发场景优化
 
-## 🗺️ Map类型支持
-- **无需定义struct**：直接使用map[string]interface{}操作数据库
-- **完整CRUD支持**：Insert、Update、Select全面支持
-- **类型安全**：自动处理类型转换和验证
-- **SQL优化**：自动生成高效的SQL语句
+## 🗺️ 智能数据类型与模式管理
+- **Map支持**：无需定义struct，直接使用`map[string]interface{}`
+- **自动命名**：驼峰命名自动转换为数据库蛇形命名
+- **灵活标签**：支持`zorm:"field_name,auto_incr"`格式
+- **原子DDL**：创建、修改、删除表的原子操作
+- **模式管理**：数据库表结构管理和验证
 
-## 🏗️ Embedded Struct支持
-- **自动展开**：嵌套结构体字段自动展开到SQL
-- **标签支持**：支持zorm标签自定义字段名
-- **递归处理**：支持多层嵌套结构体
-- **性能优化**：字段映射缓存，避免重复计算
-
-## ⏰ 更快更准确的时间解析
-- **5.1倍性能提升**：智能格式检测，单次解析
-- **100%内存优化**：零分配设计，减少内存使用
-- **多格式支持**：标准格式、时区格式、纳秒格式、纯日期格式
-- **空值处理**：自动处理空字符串和NULL值
-
-## 🔧 增强类型支持
-- **非指针类型**：Insert/Update操作支持指针和非指针结构体/切片类型
-- **自增主键标签**：自然的结构体标签支持自增主键（`zorm:"id,auto_incr"`）
-
-## 🔗 高级联表查询
-- **灵活的ON条件**：JOIN操作支持字符串和条件对象两种格式
-- **多种连接类型**：LEFT JOIN、RIGHT JOIN、INNER JOIN、FULL OUTER JOIN
-- **复杂条件**：ON子句支持嵌套的AND/OR逻辑条件
-- **类型安全**：完整的参数绑定和类型安全
-
-## 🔄 事务支持
-- **简单API**：`Begin()`、`Commit()`、`Rollback()`方法进行事务管理
-- **上下文支持**：`BeginContext()`支持上下文感知的事务
-- **错误处理**：错误时自动回滚，支持手动回滚
-- **SQLite兼容**：完整的SQLite数据库事务支持
-
-## 🏊 连接池管理
-- **可配置池**：设置最大打开连接数、空闲连接数和连接生命周期
-- **默认设置**：为大多数应用提供合理的默认值
-- **性能调优**：针对特定工作负载优化连接池
-- **资源管理**：自动连接清理和资源管理
-
-## 📊 读写分离
-- **主从架构**：自动路由读写操作
-- **轮询负载均衡**：将读查询分发到多个从数据库
-- **透明操作**：现有查询无需代码更改
-- **高可用性**：提升性能和容错能力
-
-## 🧪 实验性功能
-
-### 🏗️ DDL 和自动迁移
-- **表创建**：通过结构体定义使用 `CreateTable()` 创建表
-- **自动迁移**：使用 `AutoMigrate()` 自动迁移表结构
-- **模式管理**：检查表存在性、删除表和管理数据库模式
-- **基于标签的配置**：使用结构体标签定义字段属性和约束
-- **⚠️ 实验性**：此功能正在开发中，未来版本可能会发生变化
-
+## 🔄 完整CRUD操作与监控
+- **一行操作**：简单的Insert、Update、Select、Delete API
+- **事务支持**：内置事务管理，支持上下文
+- **联表查询**：高级JOIN操作，灵活的ON条件
+- **SQL审计**：完整的数据库操作审计日志
+- **性能监控**：实时遥测和性能指标
 
 # 目标
 - 易用：SQL-Like（一把梭：One-Line-CRUD）
@@ -98,7 +57,7 @@
 - 其他优点：
   - 更自然的where条件（仅在需要加括号时添加，对比gorm）
   - In操作接受各种类型slice
-  - 从其他orm库迁移无需修改历史代码，无侵入性修改
+  - 从其他orm库切换无需修改历史代码，无侵入性修改
 
 # 特性矩阵
 
@@ -223,14 +182,11 @@
 
 3. （可选）定义model对象
    ``` golang
-   // Info 默认未设置zorm tag的字段不会取
    type Info struct {
-      ID   int64  `zorm:"id"`
-      Name string `zorm:"name"`
-      Tag  string `zorm:"tag"`
+      ID   int64  `zorm:"user_id,auto_incr"` // 指定数据库字段名和自增
+      Name string // 自动转换为"name"
+      Tag  string // 自动转换为"tag"
    }
-
-   // 调用t.UseNameWhenTagEmpty()，可以用未设置zorm tag的字段名本身作为待获取的db字段
    ```
 
 4. 执行操作
@@ -480,8 +436,8 @@
 |Debug|打印sql语句|
 |Reuse|根据调用位置复用sql和存储方式（**默认开启**，提供2-14倍性能提升）。内建形状感知与多形状缓存|
 |NoReuse|关闭Reuse功能（不推荐，会降低性能）|
-|UseNameWhenTagEmpty|用未设置zorm tag的字段名本身作为待获取的db字段|
 |ToTimestamp|调用Insert时，使用时间戳，而非格式化字符串|
+|Audit|启用SQL审计日志和性能监控|
 
 选项使用示例：
    ``` golang
@@ -493,8 +449,11 @@
    // 如需关闭（不推荐），可调用：
    n, err = t.NoReuse().Insert(&o)
 
-   // Reuse 内建形状守卫：当同一调用点的 SQL 形状（Fields/Where/IN 占位符个数等）可能变化时，自动防止错误复用
-   n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
+   // 启用审计日志
+   n, err = t.Audit(auditLogger, telemetryCollector).Insert(&o)
+
+   // 链式多个选项
+   n, err = t.Debug().Audit(auditLogger, telemetryCollector).Insert(&o)
    ```
 
 ### Where
@@ -607,7 +566,6 @@
 - 后三个参数分别为`返回的数据`，`返回的影响条数`和`错误`
 - 只能在测试文件中使用
 
-
 ### 使用示例：
 
 待测函数：
@@ -642,6 +600,61 @@
    So(err, ShouldBeNil)
 ```
 
+### 🔍 调试、复用与审计功能
+
+#### 调试模式
+```go
+// 启用调试模式打印SQL语句
+userTable := zorm.Table(db, "users").Debug()
+n, err := userTable.Insert(&user)
+```
+
+#### 复用优化（默认开启）
+```go
+// 复用功能默认开启 - 无需配置
+// 通过智能缓存提供2-14倍性能提升
+userTable := zorm.Table(db, "users")
+n, err := userTable.Insert(&user) // 首次调用构建缓存
+n, err = userTable.Insert(&user2) // 后续调用复用SQL/元数据
+
+// 如需关闭（不推荐）
+n, err = userTable.NoReuse().Insert(&user)
+```
+
+#### 审计日志
+```go
+// 使用链式方法启用审计
+userTable := zorm.Table(db, "users").Audit(nil, nil) // 使用默认日志器
+
+// 或使用自定义日志器
+auditLogger := zorm.NewJSONAuditLogger()
+telemetryCollector := zorm.NewDefaultTelemetryCollector()
+userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
+
+// 链式多个选项
+advancedTable := zorm.Table(db, "users").
+    Debug().           // 启用调试模式
+    Audit(nil, nil)    // 启用审计日志
+```
+
+#### 性能监控
+所有操作都会自动监控遥测数据：
+- **持续时间跟踪**：测量操作执行时间
+- **缓存命中率**：监控复用效果
+- **内存使用**：跟踪分配模式
+- **错误率**：监控操作成功/失败率
+
+#### 带审计的DDL管理器
+```go
+// 创建带审计的DDL管理器
+ddlManager := zorm.NewDDLManager(auditableDB, auditLogger)
+
+// 带审计日志的表创建
+err := ddlManager.CreateTables(ctx, &User{}, &Product{}, &Order{})
+
+// 所有DDL操作都会自动审计
+```
+
 # 性能测试结果
 
 ## Reuse功能性能优化
@@ -662,41 +675,6 @@
   BenchmarkReuseOptimized-8    	 1000000	      1200 ns/op	     128 B/op	       2 allocs/op
   BenchmarkReuseOriginal-8     	  100000	     10320 ns/op	    1600 B/op	      15 allocs/op
   ```
-
-## 时间解析优化
-- **优化前**: 使用循环尝试多种时间格式
-- **优化后**: 智能格式检测，单次解析
-- **性能提升**: 5.1x 速度提升，100% 内存优化
-- **支持格式**: 
-  - 标准格式: `2006-01-02 15:04:05`
-  - 带时区: `2006-01-02 15:04:05 -0700 MST`
-  - 带纳秒: `2006-01-02 15:04:05.999999999 -0700 MST`
-  - 纯日期: `2006-01-02`
-  - 空值处理: 自动处理空字符串和NULL值
-
-## 字段缓存优化
-- **技术**: 使用`sync.Map`缓存字段映射
-- **效果**: 重复操作性能显著提升
-- **适用场景**: 批量操作、频繁查询
-
-## 字符串操作优化
-- **优化**: 使用`strings.Builder`替代多次字符串拼接
-- **效果**: 减少内存分配，提升字符串构建性能
-
-## 反射优化
-- **技术**: 使用`reflect2`替代标准`reflect`包
-- **效果**: 零使用`ValueOf`，避免性能问题
-- **优势**: 更快的类型检查和字段访问
-
-# 已完成功能
-
-- ✅ Insert/Update支持非指针类型
-- ✅ 事务相关支持
-- ✅ 联合查询
-- ✅ 连接池
-- ✅ 读写分离
-- 🧪 DDL 和自动迁移（实验性）
-- ✅ 自增主键结构体标签
 
 ## 贡献者
 

@@ -81,58 +81,25 @@ if err != nil {
 err = tx.Commit()
 ```
 
-### 4. 🏊 Connection Pool Management
+### 4. 🧪 DDL and Schema Management (Experimental Feature)
 
-#### Configurable Connection Pool
-- **Feature**: Set maximum open connections, idle connections, and connection lifetime
-- **Default Settings**: Provide reasonable defaults for most applications
-- **Example**:
-```go
-pool := &zorm.ConnectionPool{
-    MaxOpenConns:    100,
-    MaxIdleConns:    10,
-    ConnMaxLifetime: time.Hour,
-    ConnMaxIdleTime: time.Minute * 30,
-}
-zorm.SetConnectionPool(db, pool)
-```
-
-### 5. 📊 Read-Write Separation
-
-#### Master-Slave Architecture
-- **Feature**: Automatically route read/write operations to different databases
-- **Round-Robin Load Balancing**: Distribute read queries across multiple slave databases
-- **Transparent Operations**: No code changes required for existing queries
-- **Example**:
-```go
-master := sql.Open("sqlite3", "master.db")
-slave1 := sql.Open("sqlite3", "slave1.db")
-slave2 := sql.Open("sqlite3", "slave2.db")
-
-rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
-tbl := zorm.Table(rwdb, "users")
-// Read operations automatically routed to slaves, write operations to master
-```
-
-### 6. 🧪 DDL and AutoMigrate (Experimental Feature)
-
-#### Table Creation and Migration
+#### Table Creation and Schema Management
 - **Feature**: Automatically generate and create database tables from struct definitions
-- **Auto Migration**: Check table structure differences and automatically migrate
-- **Schema Management**: Provide complete database schema management functionality
+- **Schema Management**: Check table structure differences and create tables
+- **DDL Operations**: Provide complete database schema management functionality
 - **⚠️ Experimental**: This feature is under development, API may change
 - **Example**:
 ```go
 type User struct {
-    ID        int64     `zorm:"id,auto_incr"`                    // Auto-increment primary key
-    Name      string    `zorm:"name,not_null"`                   // Non-null field
-    Email     string    `zorm:"email,not_null"`                  // Non-null field
-    Age       int       `zorm:"age,default:0"`                   // Field with default value
-    IsActive  bool      `zorm:"is_active,default:true"`          // Boolean field
-    CreatedAt time.Time `zorm:"created_at,default:CURRENT_TIMESTAMP"` // Timestamp field
-    UpdatedAt *time.Time `zorm:"updated_at"`                     // Nullable timestamp
-    Profile   string    `zorm:"profile"`                         // Nullable field
-    Password  string    `zorm:"-"`                               // Ignored field
+    ID        int64     `zorm:"user_id,auto_incr"` // Auto-increment primary key
+    Name      string    // Auto-converted to "name"
+    Email     string    // Auto-converted to "email"
+    Age       int       // Auto-converted to "age"
+    IsActive  bool      // Auto-converted to "is_active"
+    CreatedAt time.Time // Auto-converted to "created_at"
+    UpdatedAt *time.Time // Auto-converted to "updated_at" (nullable)
+    Profile   string    // Auto-converted to "profile"
+    Password  string    `zorm:"-"` // Ignored field
 }
 
 // Create table
@@ -143,8 +110,8 @@ config := &zorm.DDLConfig{
 }
 err := zorm.CreateTable(db, "users", User{}, config)
 
-// Auto migrate
-err = zorm.AutoMigrate(db, &User{}, &Product{}, &Order{})
+// Create tables
+err = zorm.CreateTables(db, &User{}, &Product{}, &Order{})
 
 // Check table existence
 exists, err := zorm.TableExists(db, "users")
@@ -156,9 +123,9 @@ err = zorm.DropTable(db, "users")
 #### Supported Struct Tags
 - `zorm:"field_name"` - Field name mapping
 - `zorm:"field_name,auto_incr"` - Auto-increment primary key
-- `zorm:"field_name,not_null"` - Non-null constraint
-- `zorm:"field_name,default:value"` - Default value
+- `zorm:"auto_incr"` - Use converted field name with auto-increment
 - `zorm:"-"` - Ignore field
+- No tag - Auto-convert camelCase to snake_case
 
 ## 🚀 Performance Optimization
 
@@ -166,6 +133,37 @@ err = zorm.DropTable(db, "users")
 - **String Builder Pool**: `_sqlBuilderPool` reduces memory allocation during SQL building
 - **Parameter Slice Pool**: `_argsPool` reduces memory allocation during parameter collection
 - **Cache Optimization**: Field mapping cache to avoid repeated calculations
+
+### Connection Pool Management
+- **Configurable Pool**: Set maximum open connections, idle connections, and connection lifetime
+- **Default Settings**: Provide reasonable defaults for most applications
+- **High Concurrency**: Optimized for high-concurrency scenarios
+- **Example**:
+```go
+pool := &zorm.ConnectionPool{
+    MaxOpenConns:    100,
+    MaxIdleConns:    10,
+    ConnMaxLifetime: time.Hour,
+    ConnMaxIdleTime: time.Minute * 30,
+}
+zorm.SetConnectionPool(db, pool)
+```
+
+### Read-Write Separation
+- **Master-Slave Architecture**: Automatically route read/write operations to different databases
+- **Round-Robin Load Balancing**: Distribute read queries across multiple slave databases
+- **Transparent Operations**: No code changes required for existing queries
+- **Performance Boost**: Improved performance and fault tolerance
+- **Example**:
+```go
+master := sql.Open("sqlite3", "master.db")
+slave1 := sql.Open("sqlite3", "slave1.db")
+slave2 := sql.Open("sqlite3", "slave2.db")
+
+rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
+tbl := zorm.Table(rwdb, "users")
+// Read operations automatically routed to slaves, write operations to master
+```
 
 ### Reflection Optimization
 - **reflect2 Usage**: Faster type checking and operations

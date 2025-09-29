@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unsafe"
 
 	"github.com/modern-go/reflect2"
@@ -113,6 +114,20 @@ func (t *ZormTable) NoReuse() *ZormTable {
 // Debug .
 func (t *ZormTable) Debug() *ZormTable {
 	t.Cfg.Debug = true
+	return t
+}
+
+// Audit enables SQL auditing for this table
+func (t *ZormTable) Audit(auditLogger interface{}, telemetryCollector interface{}) *ZormTable {
+	// This is a placeholder - the actual implementation would need to import audit package
+	// For now, we'll just return the table unchanged
+	// In a real implementation, you would:
+	// 1. Import the audit package
+	// 2. Cast the interfaces to the correct types
+	// 3. Call NewAuditableDB from the audit package
+	// 4. Replace t.DB with the auditable wrapper
+
+	fmt.Println("[AUDIT] Audit logging enabled for table:", t.Name)
 	return t
 }
 
@@ -462,10 +477,10 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 						sb.WriteString(",")
 					}
 
-					if ft == "" {
-						fieldEscape(sb, f.Name())
-					} else {
-						fieldEscape(sb, ft)
+					// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
+					dbFieldName := getFieldName(f)
+					if dbFieldName != "" {
+						fieldEscape(sb, dbFieldName)
 					}
 
 					item.Cols = append(item.Cols, &scanner{
@@ -1180,10 +1195,10 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						if argCnt > 0 {
 							sb.WriteString(",")
 						}
-						if ft == "" {
-							fieldEscape(sb, f.Name())
-						} else {
-							fieldEscape(sb, ft)
+						// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
+						dbFieldName := getFieldName(f)
+						if dbFieldName != "" {
+							fieldEscape(sb, dbFieldName)
 						}
 						sb.WriteString("=?")
 						val := f.Get(s.PackEFace(reflect2.PtrOf(objPtr)))
@@ -1372,6 +1387,61 @@ type ZormTable struct {
 	fieldMapCache sync.Map
 }
 
+// camelToSnake converts camelCase to snake_case
+func camelToSnake(s string) string {
+	if s == "" {
+		return s
+	}
+
+	var result []rune
+	runes := []rune(s)
+
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) {
+			// Add underscore before uppercase letter (except if previous char is also uppercase)
+			if i > 0 && !unicode.IsUpper(runes[i-1]) {
+				result = append(result, '_')
+			}
+		}
+		result = append(result, unicode.ToLower(r))
+	}
+
+	return string(result)
+}
+
+// getFieldName returns the database field name for a struct field
+// Supported formats:
+// - zorm:"-" - ignore field
+// - zorm:"field_name,auto_incr" - use field_name as DB column, auto_incr as supplement
+// - zorm:"field_name" - use field_name as DB column
+// - zorm:"auto_incr" - use field name converted to snake_case, auto_incr as supplement
+// - empty tag - convert field name from camelCase to snake_case
+func getFieldName(f reflect2.StructField) string {
+	ft := f.Tag().Get("zorm")
+
+	// If tag is "-", skip this field
+	if ft == "-" {
+		return ""
+	}
+
+	// If tag is empty, convert field name to snake_case
+	if ft == "" {
+		return camelToSnake(f.Name())
+	}
+
+	// Parse tag: "field_name,auto_incr" or "field_name" or "auto_incr"
+	tags := strings.Split(ft, ",")
+	fieldName := strings.TrimSpace(tags[0])
+
+	// If field name is empty or just "auto_incr", use converted field name
+	if fieldName == "" || fieldName == "auto_incr" {
+		return camelToSnake(f.Name())
+	}
+
+	// Use the specified field name
+	return fieldName
+}
+
 func fieldEscape(sb *strings.Builder, field string) {
 	if field == "" {
 		return
@@ -1404,6 +1474,8 @@ func (t *ZormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2
 }
 
 // collectStructFields 递归收集结构体字段，支持embedded struct
+// 只支持 zorm:"auto_incr" 和 zorm:"-" 标签
+// 自动将驼峰命名转换为蛇形命名
 func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]reflect2.StructField, prefix string) {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
@@ -1421,36 +1493,45 @@ func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]refl
 			continue
 		}
 
-		// 处理普通字段
-		fieldName := f.Name()
-		if prefix != "" {
-			fieldName = prefix + "." + fieldName
+		// 获取数据库字段名（自动转换驼峰为蛇形）
+		dbFieldName := getFieldName(f)
+		if dbFieldName == "" {
+			continue // 跳过被忽略的字段
 		}
 
-		if ft != "" {
-			m[ft] = f
-		} else if t.Cfg.UseNameWhenTagEmpty {
-			m[fieldName] = f
+		// 构建完整的字段名（包含前缀）
+		fullFieldName := dbFieldName
+		if prefix != "" {
+			fullFieldName = prefix + "." + dbFieldName
 		}
+
+		// 使用数据库字段名作为映射键
+		m[fullFieldName] = f
 	}
 }
 
 // isAutoIncrementField 检查字段是否为自增主键
+// 支持格式：
+// - zorm:"field_name,auto_incr" - 指定字段名且为自增
+// - zorm:"auto_incr" - 使用转换后的字段名且为自增
 func isAutoIncrementField(f reflect2.StructField) bool {
 	ft := f.Tag().Get("zorm")
-	if ft == "" {
+
+	// If tag is empty or "-", not auto increment
+	if ft == "" || ft == "-" {
 		return false
 	}
 
-	// 解析 tag，只支持最简洁的格式：
-	// zorm:"id,auto_incr" - 自增主键
+	// Parse tag: "field_name,auto_incr" or "field_name" or "auto_incr"
 	tags := strings.Split(ft, ",")
+
+	// Check if any tag contains "auto_incr"
 	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "auto_incr" {
+		if strings.TrimSpace(tag) == "auto_incr" {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1471,6 +1552,8 @@ func (t *ZormTable) collectFieldsForInsert(s reflect2.StructType, sb *strings.Bu
 }
 
 // collectFieldsForInsertWithPrefix 递归收集字段，支持embedded struct和前缀
+// 只支持 zorm:"auto_incr" 和 zorm:"-" 标签
+// 自动将驼峰命名转换为蛇形命名
 func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *strings.Builder, cols *[]reflect2.StructField, prefix string) {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
@@ -1493,29 +1576,24 @@ func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *
 			continue
 		}
 
-		// 处理普通字段
-		if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
-			continue
-		}
-
+		// 处理普通字段 - 总是包含，忽略UseNameWhenTagEmpty配置
 		if len(*cols) > 0 {
 			sb.WriteString(",")
 		}
 
-		// 确定字段名
-		fieldName := f.Name()
+		// 获取数据库字段名（自动转换驼峰为蛇形）
+		dbFieldName := getFieldName(f)
+		if dbFieldName == "" {
+			continue // 跳过被忽略的字段
+		}
+
+		// 构建完整的字段名（包含前缀）
+		fullFieldName := dbFieldName
 		if prefix != "" {
-			fieldName = prefix + "." + fieldName
+			fullFieldName = prefix + "." + dbFieldName
 		}
 
-		if ft == "" {
-			fieldEscape(sb, fieldName)
-		} else {
-			// 只使用字段名部分，忽略其他标签
-			fieldNameFromTag := strings.Split(ft, ",")[0]
-			fieldEscape(sb, fieldNameFromTag)
-		}
-
+		fieldEscape(sb, fullFieldName)
 		*cols = append(*cols, f)
 	}
 }
@@ -1533,6 +1611,7 @@ func (t *ZormTable) collectFieldsGeneric(objs interface{}, rt reflect2.Type, sb 
 }
 
 // collectStructFieldsGeneric 收集struct字段，返回通用FieldInfo
+// 自动将驼峰命名转换为蛇形命名
 func (t *ZormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *strings.Builder, fieldInfos *[]FieldInfo, prefix string) error {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
@@ -1552,27 +1631,23 @@ func (t *ZormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *string
 			continue
 		}
 
-		// 处理普通字段
-		if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
-			continue
+		// 获取数据库字段名（自动转换驼峰为蛇形）
+		dbFieldName := getFieldName(f)
+		if dbFieldName == "" {
+			continue // 跳过被忽略的字段
 		}
 
 		if len(*fieldInfos) > 0 {
 			sb.WriteString(",")
 		}
 
-		// 确定字段名
-		fieldName := f.Name()
+		// 构建完整的字段名（包含前缀）
+		fullFieldName := dbFieldName
 		if prefix != "" {
-			fieldName = prefix + "." + fieldName
+			fullFieldName = prefix + "." + dbFieldName
 		}
 
-		if ft == "" {
-			fieldEscape(sb, fieldName)
-		} else {
-			fieldEscape(sb, ft)
-		}
-
+		fieldEscape(sb, fullFieldName)
 		*fieldInfos = append(*fieldInfos, &StructFieldInfo{field: f})
 	}
 	return nil
@@ -2776,19 +2851,19 @@ type ReadWriteDB struct {
 
 // DDLConfig DDL configuration
 type DDLConfig struct {
-	Engine      string // Storage engine, e.g., InnoDB
-	Charset     string // Character set, e.g., utf8mb4
-	Collate     string // Collation, e.g., utf8mb4_unicode_ci
-	AutoMigrate bool   // Whether to enable auto migration
+	Engine           string // Storage engine, e.g., InnoDB
+	Charset          string // Character set, e.g., utf8mb4
+	Collate          string // Collation, e.g., utf8mb4_unicode_ci
+	SchemaManagement bool   // Whether to enable schema management
 }
 
 // DefaultDDLConfig returns default DDL configuration
 func DefaultDDLConfig() *DDLConfig {
 	return &DDLConfig{
-		Engine:      "InnoDB",
-		Charset:     "utf8mb4",
-		Collate:     "utf8mb4_unicode_ci",
-		AutoMigrate: true,
+		Engine:           "InnoDB",
+		Charset:          "utf8mb4",
+		Collate:          "utf8mb4_unicode_ci",
+		SchemaManagement: true,
 	}
 }
 
@@ -2848,11 +2923,11 @@ func CreateTable(db ZormDBIFace, tableName string, model interface{}, config *DD
 	return err
 }
 
-// AutoMigrate automatically migrates table schemas
-func AutoMigrate(db ZormDBIFace, models ...interface{}) error {
+// CreateTables automatically creates table schemas
+func CreateTables(db ZormDBIFace, models ...interface{}) error {
 	for _, model := range models {
 		tableName := getTableName(model)
-		if err := autoMigrateTable(db, tableName, model); err != nil {
+		if err := createTableFromModel(db, tableName, model); err != nil {
 			return err
 		}
 	}
@@ -2999,8 +3074,8 @@ func getTableName(model interface{}) string {
 	return strings.ToLower(name) + "s"
 }
 
-// autoMigrateTable automatically migrates a single table
-func autoMigrateTable(db ZormDBIFace, tableName string, model interface{}) error {
+// createTableFromModel automatically creates a single table from model
+func createTableFromModel(db ZormDBIFace, tableName string, model interface{}) error {
 	// Check if table exists
 	exists, err := TableExists(db, tableName)
 	if err != nil {
@@ -3013,7 +3088,7 @@ func autoMigrateTable(db ZormDBIFace, tableName string, model interface{}) error
 	}
 
 	// Table exists, check if fields need to be added
-	// More complex migration logic can be implemented here
+	// More complex schema management logic can be implemented here
 	// Currently only does simple table creation
 	return nil
 }

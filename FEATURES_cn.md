@@ -81,58 +81,25 @@ if err != nil {
 err = tx.Commit()
 ```
 
-### 4. 🏊 连接池管理
+### 4. 🧪 DDL 和模式管理（实验性功能）
 
-#### 可配置的连接池
-- **功能**：设置最大打开连接数、空闲连接数和连接生命周期
-- **默认设置**：为大多数应用提供合理的默认值
-- **示例**：
-```go
-pool := &zorm.ConnectionPool{
-    MaxOpenConns:    100,
-    MaxIdleConns:    10,
-    ConnMaxLifetime: time.Hour,
-    ConnMaxIdleTime: time.Minute * 30,
-}
-zorm.SetConnectionPool(db, pool)
-```
-
-### 5. 📊 读写分离
-
-#### 主从架构
-- **功能**：自动路由读写操作到不同的数据库
-- **轮询负载均衡**：将读查询分发到多个从数据库
-- **透明操作**：现有查询无需代码更改
-- **示例**：
-```go
-master := sql.Open("sqlite3", "master.db")
-slave1 := sql.Open("sqlite3", "slave1.db")
-slave2 := sql.Open("sqlite3", "slave2.db")
-
-rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
-tbl := zorm.Table(rwdb, "users")
-// 读操作自动路由到从库，写操作自动路由到主库
-```
-
-### 6. 🧪 DDL 和自动迁移（实验性功能）
-
-#### 表创建和迁移
+#### 表创建和模式管理
 - **功能**：从结构体定义自动生成和创建数据库表
-- **自动迁移**：检查表结构差异并自动迁移
-- **模式管理**：提供完整的数据库模式管理功能
+- **模式管理**：检查表结构差异并创建表
+- **DDL操作**：提供完整的数据库模式管理功能
 - **⚠️ 实验性**：此功能正在开发中，API 可能发生变化
 - **示例**：
 ```go
 type User struct {
-    ID        int64     `zorm:"id,auto_incr"`                    // 自增主键
-    Name      string    `zorm:"name,not_null"`                   // 非空字段
-    Email     string    `zorm:"email,not_null"`                  // 非空字段
-    Age       int       `zorm:"age,default:0"`                   // 带默认值
-    IsActive  bool      `zorm:"is_active,default:true"`          // 布尔字段
-    CreatedAt time.Time `zorm:"created_at,default:CURRENT_TIMESTAMP"` // 时间戳
-    UpdatedAt *time.Time `zorm:"updated_at"`                     // 可空时间戳
-    Profile   string    `zorm:"profile"`                         // 可空字段
-    Password  string    `zorm:"-"`                               // 忽略字段
+    ID        int64     `zorm:"user_id,auto_incr"` // 自增主键
+    Name      string    // 自动转换为"name"
+    Email     string    // 自动转换为"email"
+    Age       int       // 自动转换为"age"
+    IsActive  bool      // 自动转换为"is_active"
+    CreatedAt time.Time // 自动转换为"created_at"
+    UpdatedAt *time.Time // 自动转换为"updated_at"（可空）
+    Profile   string    // 自动转换为"profile"
+    Password  string    `zorm:"-"` // 忽略字段
 }
 
 // 创建表
@@ -143,8 +110,8 @@ config := &zorm.DDLConfig{
 }
 err := zorm.CreateTable(db, "users", User{}, config)
 
-// 自动迁移
-err = zorm.AutoMigrate(db, &User{}, &Product{}, &Order{})
+// 创建表
+err = zorm.CreateTables(db, &User{}, &Product{}, &Order{})
 
 // 检查表存在性
 exists, err := zorm.TableExists(db, "users")
@@ -156,9 +123,9 @@ err = zorm.DropTable(db, "users")
 #### 支持的结构体标签
 - `zorm:"field_name"` - 字段名映射
 - `zorm:"field_name,auto_incr"` - 自增主键
-- `zorm:"field_name,not_null"` - 非空约束
-- `zorm:"field_name,default:value"` - 默认值
+- `zorm:"auto_incr"` - 使用转换后的字段名并标记为自增
 - `zorm:"-"` - 忽略字段
+- 无标签 - 自动将驼峰命名转换为蛇形命名
 
 ## 🚀 性能优化
 
