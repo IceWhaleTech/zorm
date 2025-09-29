@@ -29,7 +29,7 @@
 - **Atomic DDL**: Create, alter, and drop tables with atomic operations
 - **Schema Management**: Automatic schema creation and validation
 
-## 🔄 Complete CRUD Operations & Monitoring
+## 🛠️ Complete CRUD Operations & Monitoring
 - **One-Line Operations**: Simple Insert, Update, Select, Delete APIs
 - **Transaction Support**: Built-in transaction management with context support
 - **Join Queries**: Advanced JOIN operations with flexible ON conditions
@@ -476,11 +476,18 @@ Option usage example:
    // If you need to disable it (not recommended), you can call:
    n, err = t.NoReuse().Insert(&o)
 
-   // Enable audit logging
-   n, err = t.Audit(auditLogger, telemetryCollector).Insert(&o)
+   // Enable audit with chain-style method
+   userTable := zorm.Table(db, "users").Audit(nil, nil) // Uses default loggers
+
+   // Or with custom loggers
+   auditLogger := zorm.NewJSONAuditLogger()
+   telemetryCollector := zorm.NewDefaultTelemetryCollector()
+   userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
 
    // Chain multiple options
-   n, err = t.Debug().Audit(auditLogger, telemetryCollector).Insert(&o)
+   advancedTable := zorm.Table(db, "users").
+      Debug().           // Enable debug mode
+      Audit(nil, nil)    // Enable audit logging
    ```
 
 ### Where
@@ -625,43 +632,6 @@ In the `x.test` method querying `tbl` data, we need to mock database operations
    // Check if all hits
    err = z.ZormMockFinish()
    So(err, ShouldBeNil)
-```
-
-### 🔍 Debug, Reuse & Audit Features
-
-#### Debug Mode
-```go
-// Enable debug mode to print SQL statements
-userTable := zorm.Table(db, "users").Debug()
-n, err := userTable.Insert(&user)
-```
-
-#### Reuse Optimization (Enabled by Default)
-```go
-// Reuse is enabled by default - no configuration needed
-// Provides 2-14x performance improvement through smart caching
-userTable := zorm.Table(db, "users")
-n, err := userTable.Insert(&user) // First call builds cache
-n, err = userTable.Insert(&user2) // Subsequent calls reuse SQL/metadata
-
-// Disable reuse if needed (not recommended)
-n, err = userTable.NoReuse().Insert(&user)
-```
-
-#### Audit Logging
-```go
-// Enable audit with chain-style method
-userTable := zorm.Table(db, "users").Audit(nil, nil) // Uses default loggers
-
-// Or with custom loggers
-auditLogger := zorm.NewJSONAuditLogger()
-telemetryCollector := zorm.NewDefaultTelemetryCollector()
-userTable := zorm.Table(db, "users").Audit(auditLogger, telemetryCollector)
-
-// Chain multiple options
-advancedTable := zorm.Table(db, "users").
-    Debug().           // Enable debug mode
-    Audit(nil, nil)    // Enable audit logging
 ```
 
 #### Performance Monitoring

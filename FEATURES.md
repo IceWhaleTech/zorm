@@ -81,13 +81,12 @@ if err != nil {
 err = tx.Commit()
 ```
 
-### 4. 🧪 DDL and Schema Management (Experimental Feature)
+### 4. 🏗️ DDL and Schema Management
 
 #### Table Creation and Schema Management
 - **Feature**: Automatically generate and create database tables from struct definitions
 - **Schema Management**: Check table structure differences and create tables
 - **DDL Operations**: Provide complete database schema management functionality
-- **⚠️ Experimental**: This feature is under development, API may change
 - **Example**:
 ```go
 type User struct {
