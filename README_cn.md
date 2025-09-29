@@ -17,7 +17,7 @@
 
 ## ⚡ 高性能
 - **8.6倍性能提升**：智能缓存与零分配设计
-- **默认开启Reuse**：自动复用SQL和元数据，提升重复操作性能
+- **默认开启重用**：自动复用SQL和元数据，提升重复操作性能
 - **连接池管理**：可配置连接池，为高并发场景提供最优默认值
 - **读写分离**：自动路由读写操作，提升整体性能
 - **并发安全**：针对高并发场景优化
@@ -178,7 +178,7 @@
 - `d.DB`是支持Exec/Query/QueryRow的数据库连接对象
 - `t_usr`可以是表名，或者是嵌套查询语句
 - `ctx`是需要传递的Context对象，默认不传为context.Background()
-- **Reuse功能默认开启**，提供2-14倍性能提升，无需额外配置
+- **重用功能默认开启**，提供2-14倍性能提升，无需额外配置
 
 3. （可选）定义model对象
    ``` golang
@@ -294,9 +294,9 @@
    n, err = t.Update(&o, z.Fields("name"), z.Where(z.Eq("id", id)))
    ```
 
-- CRUD 配合 Reuse（默认开启）
+- CRUD 配合 重用（默认开启）
   ``` golang
-  // Reuse 默认开启；同一调用点重复调用会复用 SQL/元数据
+  // 重用 默认开启；同一调用点重复调用会复用 SQL/元数据
   // Update 示例
   type User struct { ID int64 `zorm:"id"`; Name string `zorm:"name"`; Age int `zorm:"age"` }
   for _, u := range users {
@@ -657,7 +657,7 @@ err := ddlManager.CreateTables(ctx, &User{}, &Product{}, &Order{})
 
 # 性能测试结果
 
-## Reuse功能性能优化
+## 重用功能性能优化
 - **基准测试结果**:
   - 单线程: 8.6x 性能提升
   - 并发场景: 最高14.2x 性能提升
