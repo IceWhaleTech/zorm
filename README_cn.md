@@ -260,6 +260,21 @@
 
    // 可以强制索引
    n, err = t.Select(&ids, z.Fields("id"), z.IndexedBy("idx_xxx"), z.Where("name = ?", name))
+
+   // 高级连接查询
+   // 使用字符串 ON 条件的简单连接
+   var results []UserOrder
+   n, err := t.Select(&results,
+      z.Fields("users.id", "users.name", "orders.amount"),
+      z.InnerJoin("orders", "users.id = orders.user_id"),
+      z.Where("orders.status = ?", "completed"),
+   )
+
+   // 使用条件对象的复杂连接
+   n, err = t.Select(&results,
+      z.Fields("users.id", "users.name", "orders.amount"),
+      z.LeftJoin("orders", z.Eq("users.id", z.U("orders.user_id"))),
+   )
    ```
 
 - Select 到 Map（无需定义 struct）
