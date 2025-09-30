@@ -352,6 +352,14 @@
    n, err = t.Delete(z.Where(z.Eq("id", id)))
    ```
 
+- Exec (Raw SQL)
+   ``` golang
+   // Execute raw SQL with parameters
+   n, err = t.Exec("UPDATE users SET status = ? WHERE id = ?", "active", 123)
+   n, err = t.Exec("DELETE FROM logs WHERE created_at < ?", time.Now().AddDate(0, 0, -30))
+   n, err = t.Exec("CREATE INDEX idx_name ON users (name)")
+   ```
+
 - **Variable conditions**
    ``` golang
    conds := []interface{}{z.Cond("1=1")} // prevent empty where condition

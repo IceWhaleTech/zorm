@@ -10,7 +10,6 @@
 
 ## 📚 文档
 
-- **[功能特性](FEATURES_cn.md)**  - 完整的功能概览和实现细节
 - **[性能报告](PERFORMANCE_REPORT_cn.md)** - 详细的性能基准测试和优化分析
 
 # 🚀 核心特性
@@ -21,6 +20,8 @@
 - **连接池管理**：可配置连接池，为高并发场景提供最优默认值
 - **读写分离**：自动路由读写操作，提升整体性能
 - **并发安全**：针对高并发场景优化
+- **内存池优化**：字符串构建器和参数切片池减少分配
+- **反射优化**：reflect2使用，更快的类型检查和零分配设计
 
 ## 🗺️ 智能数据类型与模式管理
 - **Map支持**：无需定义struct，直接使用`map[string]interface{}`
@@ -28,6 +29,8 @@
 - **灵活标签**：支持`zorm:"field_name,auto_incr"`格式
 - **原子DDL**：创建、修改、删除表的原子操作
 - **模式管理**：数据库表结构管理和验证
+- **增强类型支持**：指针和非指针结构体/切片类型
+- **自增主键**：简洁的结构体标签支持自增字段
 
 ## 🛠️ 完整CRUD操作与监控
 - **一行操作**：简单的Insert、Update、Select、Delete API
@@ -35,6 +38,8 @@
 - **联表查询**：高级JOIN操作，灵活的ON条件
 - **SQL审计**：完整的数据库操作审计日志
 - **性能监控**：实时遥测和性能指标
+- **多种连接类型**：LEFT JOIN、RIGHT JOIN、INNER JOIN、FULL OUTER JOIN
+- **灵活的ON条件**：支持字符串和条件对象两种格式
 
 # 目标
 - 易用：SQL-Like（一把梭：One-Line-CRUD）
@@ -331,6 +336,14 @@
    n, err = t.Delete(z.Where(z.Eq("id", id)))
    ```
 
+- 执行原生SQL
+   ``` golang
+   // 执行带参数的原生SQL
+   n, err = t.Exec("UPDATE users SET status = ? WHERE id = ?", "active", 123)
+   n, err = t.Exec("DELETE FROM logs WHERE created_at < ?", time.Now().AddDate(0, 0, -30))
+   n, err = t.Exec("CREATE INDEX idx_name ON users (name)")
+   ```
+
 - **可变条件**
    ``` golang
    conds := []interface{}{z.Cond("1=1")} // 防止空where条件
@@ -441,6 +454,178 @@
    // or
    t := z.Table(db.Slave().DB().DB, "tbl")
    ```
+
+# 🎯 高级功能
+
+## 增强类型支持
+
+### 非指针类型支持
+Insert/Update 操作现在支持指针和非指针结构体/切片类型，提供更灵活的使用方式：
+
+```go
+// 支持非指针类型
+user := User{Name: "Alice", Age: 25}        // 非指针结构体
+users := []User{{Name: "Bob", Age: 30}}     // 非指针切片
+
+tbl.Insert(user)   // 直接传入非指针
+tbl.Insert(&users) // 传入非指针切片的指针
+```
+
+### 自增主键结构体标签
+使用简洁的结构体标签支持自增主键，保持向后兼容：
+
+```go
+type User struct {
+    ID   int64  `zorm:"id,auto_incr"` // 自增主键
+    Name string `zorm:"name"`
+    Age  int    `zorm:"age"`
+}
+
+user := User{Name: "Alice", Age: 25}
+tbl.Insert(&user)
+// user.ID 会自动设置为生成的ID
+```
+
+## 高级连接查询
+
+### 灵活的ON条件
+JOIN 操作支持字符串和条件对象两种格式，提供强大的查询能力：
+
+```go
+// 字符串格式
+zorm.InnerJoin("orders", "users.id = orders.user_id")
+
+// 条件对象格式
+zorm.LeftJoin("orders", 
+    zorm.And(
+        zorm.Eq("users.id", zorm.U("orders.user_id")),
+        zorm.Neq("orders.status", "cancelled"),
+    ),
+)
+```
+
+### 多种连接类型
+- **支持的类型**：LEFT JOIN、RIGHT JOIN、INNER JOIN、FULL OUTER JOIN
+- **类型安全**：完整的参数绑定和类型安全
+
+## 事务支持
+
+### 简单的事务API
+内置事务管理，支持上下文：
+
+```go
+tx, err := zorm.Begin(db)
+if err != nil {
+    return err
+}
+defer tx.Rollback() // 确保错误时回滚
+
+txTbl := zorm.Table(tx, "users")
+_, err = txTbl.Insert(&user)
+if err != nil {
+    return err
+}
+
+err = tx.Commit()
+```
+
+## DDL和模式管理
+
+### 表创建和模式管理
+从结构体定义自动生成和创建数据库表：
+
+```go
+type User struct {
+    ID        int64     `zorm:"user_id,auto_incr"` // 自增主键
+    Name      string    // 自动转换为"name"
+    Email     string    // 自动转换为"email"
+    Age       int       // 自动转换为"age"
+    IsActive  bool      // 自动转换为"is_active"
+    CreatedAt time.Time // 自动转换为"created_at"
+    UpdatedAt *time.Time // 自动转换为"updated_at"（可空）
+    Profile   string    // 自动转换为"profile"
+    Password  string    `zorm:"-"` // 忽略字段
+}
+
+// 创建表
+config := &zorm.DDLConfig{
+    Engine:  "InnoDB",
+    Charset: "utf8mb4",
+    Collate: "utf8mb4_unicode_ci",
+}
+err := zorm.CreateTable(db, "users", User{}, config)
+
+// 创建表
+err = zorm.CreateTables(db, &User{}, &Product{}, &Order{})
+
+// 检查表存在性
+exists, err := zorm.TableExists(db, "users")
+
+// 删除表
+err = zorm.DropTable(db, "users")
+```
+
+### 支持的结构体标签
+- `zorm:"field_name"` - 字段名映射
+- `zorm:"field_name,auto_incr"` - 自增主键
+- `zorm:"auto_incr"` - 使用转换后的字段名并标记为自增
+- `zorm:"-"` - 忽略字段
+- 无标签 - 自动将驼峰命名转换为蛇形命名
+
+## 性能优化
+
+### 内存池优化
+- **字符串构建器池**：`_sqlBuilderPool` 减少 SQL 构建时的内存分配
+- **参数切片池**：`_argsPool` 减少参数收集时的内存分配
+- **缓存优化**：字段映射缓存，避免重复计算
+
+### 连接池管理
+为高并发场景提供可配置的池设置：
+
+```go
+pool := &zorm.ConnectionPool{
+    MaxOpenConns:    100,
+    MaxIdleConns:    10,
+    ConnMaxLifetime: time.Hour,
+    ConnMaxIdleTime: time.Minute * 30,
+}
+zorm.SetConnectionPool(db, pool)
+```
+
+### 读写分离
+主从架构，自动操作路由：
+
+```go
+master := sql.Open("sqlite3", "master.db")
+slave1 := sql.Open("sqlite3", "slave1.db")
+slave2 := sql.Open("sqlite3", "slave2.db")
+
+rwdb := zorm.NewReadWriteDB(master, slave1, slave2)
+tbl := zorm.Table(rwdb, "users")
+// 读操作自动路由到从库，写操作路由到主库
+```
+
+## 测试覆盖
+
+### 功能测试
+- ✅ 非指针类型支持测试
+- ✅ 自增主键标签测试
+- ✅ 连接查询测试
+- ✅ 事务支持测试
+- ✅ 连接池配置测试
+- ✅ 读写分离测试
+
+### 性能测试
+- ✅ 基准测试通过
+- ✅ 内存使用优化验证
+- ✅ 并发安全测试
+
+## 向后兼容性
+
+所有新功能都保持了向后兼容性：
+- 旧的 `ZormLastId` 字段仍然支持
+- 现有的 API 调用方式不变
+- 现有的配置和设置继续有效
 
 # 其他细节
 

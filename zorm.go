@@ -1340,6 +1340,29 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 	return int(row), nil
 }
 
+// Exec executes a raw SQL statement with optional parameters
+// Returns the number of affected rows and any error
+func (t *ZormTable) Exec(query string, args ...interface{}) (int, error) {
+	if config.Mock {
+		pc, fileName, _, _ := runtime.Caller(1)
+		if ok, _, n, e := checkMock(t.Name, "Exec", runtime.FuncForPC(pc).Name(), fileName, path.Dir(fileName)); ok {
+			return n, e
+		}
+	}
+
+	if t.Cfg.Debug {
+		log.Println(query, args)
+	}
+
+	res, err := t.DB.ExecContext(t.ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	return int(rowsAffected), nil
+}
+
 func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
 	for _, col := range cols {
 		var v interface{}
