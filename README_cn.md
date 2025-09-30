@@ -175,7 +175,7 @@
 3. （可选）定义model对象
    ``` golang
    type Info struct {
-      ID   int64  `zorm:"user_id,auto_incr"` // 指定数据库字段名和自增
+      ID   int64  `zorm:"id,auto_incr"` // 自增主键
       Name string // 自动转换为"name"
       Tag  string // 自动转换为"tag"
    }
@@ -364,11 +364,11 @@
 
 -  获取插入的自增id
    ``` golang
-   // 首先需要数据库有一个自增ID的字段
+   // 现代方法：使用 auto_incr 标签
    type Info struct {
-      ZormLastId int64 // 添加一个名为ZormLastId的整型字段
-      Name       string `zorm:"name"`
-      Age        string `zorm:"age"`
+      ID   int64  `zorm:"id,auto_incr"` // 自增主键
+      Name string `zorm:"name"`
+      Age  int    `zorm:"age"`
    }
 
    o := Info{
@@ -377,8 +377,10 @@
    }
    n, err = t.Insert(&o)
 
-   id := o.ZormLastId // 获取到插入的id
+   id := o.ID // 自动获取插入的id
    ```
+
+   **注意**：旧的 `ZormLastId` 字段仍然支持向后兼容，但推荐使用现代的 `auto_incr` 标签方法。
 
 - **新功能示例：Map类型和Embedded Struct**
    ``` golang

@@ -176,7 +176,7 @@
 3. (Optional) Define model object
    ``` golang
    type Info struct {
-      ID   int64  `zorm:"user_id,auto_incr"` // Specify DB column name and auto-increment
+      ID   int64  `zorm:"id,auto_incr"` // Auto-increment primary key
       Name string // Auto-converted to "name"
       Tag  string // Auto-converted to "tag"
    }
@@ -377,11 +377,11 @@
 
 - Get inserted auto-increment id
    ``` golang
-   // First need database to have an auto-increment ID field
+   // Modern approach: Use auto_incr tag
    type Info struct {
-      ZormLastId int64 // add a field named ZormLastId of integer type
-      Name       string `zorm:"name"`
-      Age        string `zorm:"age"`
+      ID   int64  `zorm:"id,auto_incr"` // Auto-increment primary key
+      Name string `zorm:"name"`
+      Age  int    `zorm:"age"`
    }
 
    o := Info{
@@ -390,8 +390,10 @@
    }
    n, err = t.Insert(&o)
 
-   id := o.ZormLastId // get the inserted id
+   id := o.ID // get the inserted id automatically set
    ```
+
+   **Note**: The old `ZormLastId` field is still supported for backward compatibility, but the modern `auto_incr` tag approach is recommended.
 
 - **New features example: Map types and Embedded Struct**
    ``` golang
