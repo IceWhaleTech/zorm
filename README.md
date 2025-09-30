@@ -15,29 +15,18 @@
 - **Reuse Enabled by Default**: Automatic SQL and metadata reuse for repeated operations
 - **Connection Pool Management**: Configurable pool with optimal defaults for high concurrency
 - **Read-Write Separation**: Automatic routing of read/write operations for better performance
-- **Concurrent Safe**: Optimized for high concurrency scenarios
-- **Memory Pool Optimization**: String builder and parameter slice pools reduce allocation
-- **Reflection Optimization**: reflect2 usage for faster type checking and zero-allocation design
 
 ## 🗺️ Smart Data Types & Schema Management
 - **Map Support**: Use `map[string]interface{}` without struct definitions
 - **Auto Naming**: CamelCase to snake_case conversion for database fields
 - **Flexible Tags**: Support `zorm:"field_name,auto_incr"` format
 - **Atomic DDL**: Create, alter, and drop tables with atomic operations
-- **Schema Management**: Automatic schema creation and validation
-- **Enhanced Type Support**: Both pointer and non-pointer struct/slice types
-- **Auto-Increment Primary Keys**: Concise struct tags for auto-increment fields
-- **Advanced Struct Tags**: Field mapping, auto-increment, and ignore field tags
 
 ## 🛠️ Complete CRUD Operations & Monitoring
 - **One-Line Operations**: Simple Insert, Update, Select, Delete APIs
 - **Transaction Support**: Built-in transaction management with context support
 - **Join Queries**: Advanced JOIN operations with flexible ON conditions
 - **SQL Audit**: Complete audit logging for all database operations
-- **Performance Monitoring**: Real-time telemetry and performance metrics
-- **Advanced Join Types**: LEFT JOIN, RIGHT JOIN, INNER JOIN, FULL OUTER JOIN
-- **Flexible ON Conditions**: Support both string and condition object formats
-- **Raw SQL Execution**: Direct SQL execution with parameter binding
 
 
 # Goals
