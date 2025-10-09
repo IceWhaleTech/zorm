@@ -2,8 +2,8 @@
 
 ## Test Environment
 - **Operating System**: macOS (darwin)
-- **Architecture**: amd64
-- **CPU**: VirtualApple @ 2.50GHz
+- **Architecture**: arm64
+- **CPU**: Apple M4 Pro
 - **Go Version**: 1.21+
 - **Test Date**: 2025-09-28
 
