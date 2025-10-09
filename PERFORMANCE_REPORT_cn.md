@@ -2,8 +2,8 @@
 
 ## 测试环境
 - **操作系统**: macOS (darwin)
-- **架构**: amd64
-- **CPU**: VirtualApple @ 2.50GHz
+- **架构**: arm64
+- **CPU**: Apple M4 Pro
 - **Go版本**: 1.21+
 - **测试时间**: 2025-09-28
 
