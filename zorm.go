@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	_fields = 1 >> iota
+	_fields = 1 << iota
 	_join
 	_indexedBy
 	_where
@@ -332,6 +332,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		isArray    bool
 		isPtrArray bool
 		rtElem     = rt
+		isPtrPtr   bool // 标记是否是指针的指针（如 **User）
 
 		item     *DataBindingItem
 		stmtArgs []interface{}
@@ -343,7 +344,15 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 
 	switch rt.Kind() {
 	case reflect.Ptr:
-		rt = rt.(reflect2.PtrType).Elem()
+		// 检查是否是指针的指针
+		rtTemp := rt.(reflect2.PtrType).Elem()
+		if rtTemp.Kind() == reflect.Ptr {
+			isPtrPtr = true
+		}
+		// 解引用所有指针层，直到找到非指针类型
+		for rt.Kind() == reflect.Ptr {
+			rt = rt.(reflect2.PtrType).Elem()
+		}
 		rtElem = rt
 		if rt.Kind() == reflect.Slice {
 			rtElem = rt.(reflect2.ListType).Elem()
@@ -353,6 +362,9 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				rtElem = rtElem.(reflect2.PtrType).Elem()
 				isPtrArray = true
 			}
+		} else if rt.Kind() == reflect.Map {
+			// 支持 *map[string]interface{} 或 **map[string]interface{} 类型
+			rtElem = rt
 		}
 	case reflect.Map:
 		// 直接支持map类型
@@ -406,7 +418,12 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		if isArray {
 			item.Elem = rtElem.New()
 		} else {
-			item.Elem = res
+			if isPtrPtr {
+				// 如果是指针的指针，创建新对象
+				item.Elem = rtElem.New()
+			} else {
+				item.Elem = res
+			}
 		}
 
 		// struct类型
@@ -414,89 +431,131 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 			s := rtElem.(reflect2.StructType)
 
 			if len(args) > 0 && args[0].Type() == _fields {
-				m := t.getStructFieldMap(s)
+				fieldsList := args[0].(*fieldsItem).Fields
+				// 如果 Fields() 是空的，跳过它，使用默认行为（选择所有有 zorm 标签的字段）
+				if len(fieldsList) == 0 {
+					// 跳过 Fields() 参数，使用默认行为
+					args = args[1:]
+					// 继续执行，进入 else 分支（不执行下面的代码）
+				} else {
+					m := t.getStructFieldMap(s)
 
-				for _, field := range args[0].(*fieldsItem).Fields {
-					if field == "*" {
-						// 处理通配符：选择所有字段
-						for i := 0; i < s.NumField(); i++ {
-							f := s.Field(i)
-							ft := f.Tag().Get("zorm")
+					wildcardUsed := false
+					for _, field := range fieldsList {
+						if field == "*" {
+							// 处理通配符：选择所有字段
+							// 使用递归函数处理嵌入结构体，直接展开嵌入字段
+							wildcardUsed = true
+							var collectFieldsForWildcard func(s reflect2.StructType)
+							collectFieldsForWildcard = func(s reflect2.StructType) {
+								for i := 0; i < s.NumField(); i++ {
+									f := s.Field(i)
+									ft := f.Tag().Get("zorm")
 
-							// 忽略zorm tag为"-"的字段
-							if ft == "-" {
-								continue
-							}
-
-							// 处理embedded struct
-							if f.Anonymous() && f.Type().Kind() == reflect.Struct {
-								embeddedStruct := f.Type().(reflect2.StructType)
-								for j := 0; j < embeddedStruct.NumField(); j++ {
-									ef := embeddedStruct.Field(j)
-									eft := ef.Tag().Get("zorm")
-									if eft == "-" {
+									// 忽略zorm tag为"-"的字段
+									if ft == "-" {
 										continue
 									}
+
+									// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+									if f.Name() == "ZormLastId" {
+										continue
+									}
+
+									// 处理embedded struct：直接递归展开，不使用结构体名称
+									if f.Anonymous() && f.Type().Kind() == reflect.Struct {
+										embeddedStruct := f.Type().(reflect2.StructType)
+										collectFieldsForWildcard(embeddedStruct)
+										continue
+									}
+
+									// 获取数据库字段名
+									dbFieldName := getFieldName(f)
+									if dbFieldName == "" {
+										continue
+									}
+
+									// 构建SQL字段列表
+									if len(item.Cols) > 0 {
+										sb.WriteString(",")
+									}
+									fieldEscape(sb, dbFieldName)
+
 									item.Cols = append(item.Cols, &scanner{
-										Type: ef.Type(),
-										Val:  ef.UnsafeGet(reflect2.PtrOf(item.Elem)),
+										Type: f.Type(),
+										Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
 									})
 								}
-								continue
 							}
-
-							item.Cols = append(item.Cols, &scanner{
-								Type: f.Type(),
-								Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-							})
-						}
-					} else {
-						f := m[field]
-						if f != nil {
-							item.Cols = append(item.Cols, &scanner{
-								Type: f.Type(),
-								Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-							})
+							collectFieldsForWildcard(s)
+						} else {
+							f := m[field]
+							if f != nil {
+								item.Cols = append(item.Cols, &scanner{
+									Type: f.Type(),
+									Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
+								})
+							}
 						}
 					}
+
+					// 如果使用了通配符，已经构建了SQL，不需要再调用BuildSQL
+					if !wildcardUsed {
+						(args[0]).BuildSQL(sb)
+					}
+					args = args[1:]
 				}
-
-				(args[0]).BuildSQL(sb)
-				args = args[1:]
-
-			} else {
+			}
+			
+			// 如果没有指定 Fields() 或 Fields() 是空的，使用默认行为
+			if len(args) == 0 || (len(args) > 0 && args[0].Type() != _fields) {
 				// 无条件查询：选择所有字段（有zorm tag或UseNameWhenTagEmpty为true）
-				for i := 0; i < s.NumField(); i++ {
-					f := s.Field(i)
-					ft := f.Tag().Get("zorm")
+				// 使用递归函数处理嵌入结构体
+				var collectFieldsForDefault func(s reflect2.StructType)
+				collectFieldsForDefault = func(s reflect2.StructType) {
+					for i := 0; i < s.NumField(); i++ {
+						f := s.Field(i)
+						ft := f.Tag().Get("zorm")
 
-					// 忽略zorm tag为"-"的字段
-					if ft == "-" {
-						continue
+						// 忽略zorm tag为"-"的字段
+						if ft == "-" {
+							continue
+						}
+
+						// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+						if f.Name() == "ZormLastId" {
+							continue
+						}
+
+						// 处理embedded struct：直接递归展开，不使用结构体名称
+						if f.Anonymous() && f.Type().Kind() == reflect.Struct {
+							embeddedStruct := f.Type().(reflect2.StructType)
+							collectFieldsForDefault(embeddedStruct)
+							continue
+						}
+
+						// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
+						dbFieldName := getFieldName(f)
+						if dbFieldName == "" {
+							// 如果字段名为空，跳过该字段
+							continue
+						}
+						
+						// 如果没有zorm tag且UseNameWhenTagEmpty为false，但getFieldName返回了字段名（自动转换），仍然包含该字段
+						// 这样可以支持自动驼峰转蛇形的功能
+
+						if len(item.Cols) > 0 {
+							sb.WriteString(",")
+						}
+						fieldEscape(sb, dbFieldName)
+
+						item.Cols = append(item.Cols, &scanner{
+							Type: f.Type(),
+							Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
+						})
 					}
-
-					// 如果没有zorm tag且UseNameWhenTagEmpty为false，跳过
-					if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
-						continue
-					}
-
-					// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
-					dbFieldName := getFieldName(f)
-					if dbFieldName == "" {
-						// 如果字段名为空，跳过该字段
-						continue
-					}
-
-					if len(item.Cols) > 0 {
-						sb.WriteString(",")
-					}
-					fieldEscape(sb, dbFieldName)
-
-					item.Cols = append(item.Cols, &scanner{
-						Type: f.Type(),
-						Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-					})
 				}
+				collectFieldsForDefault(s)
 
 				// 如果没有选择任何字段，返回错误
 				if len(item.Cols) == 0 {
@@ -505,29 +564,32 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				}
 			}
 		} else if rtElem.Kind() == reflect.Map {
-			// map类型必须指定Fields
-			if len(args) == 0 || args[0].Type() != _fields {
-				return 0, errors.New("map type requires Fields() to specify columns")
-			}
+			// map类型：如果指定了Fields，使用指定的字段；否则使用 SELECT *
+			if len(args) > 0 && args[0].Type() == _fields {
+				fi := args[0].(*fieldsItem)
+				// 存储Fields信息到item中，供后续使用
+				item.Fields = fi.Fields
 
-			fi := args[0].(*fieldsItem)
-			// 存储Fields信息到item中，供后续使用
-			item.Fields = fi.Fields
+				for i, field := range fi.Fields {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					fieldEscape(sb, field)
 
-			for i, field := range fi.Fields {
-				if i > 0 {
-					sb.WriteString(",")
+					// 为map创建interface{}类型的scanner
+					var temp interface{}
+					item.Cols = append(item.Cols, &scanner{
+						Type: reflect2.TypeOf((*interface{})(nil)).(reflect2.PtrType).Elem(),
+						Val:  unsafe.Pointer(&temp), // 临时指针，稍后会被替换
+					})
 				}
-				fieldEscape(sb, field)
-
-				// 为map创建interface{}类型的scanner
-				var temp interface{}
-				item.Cols = append(item.Cols, &scanner{
-					Type: reflect2.TypeOf((*interface{})(nil)).(reflect2.PtrType).Elem(),
-					Val:  unsafe.Pointer(&temp), // 临时指针，稍后会被替换
-				})
+				args = args[1:]
+			} else {
+				// 没有指定Fields，使用 SELECT *
+				sb.WriteString("*")
+				// 注意：这种情况下，我们无法预先知道列的数量和类型
+				// 需要在执行查询后动态处理
 			}
-			args = args[1:]
 		} else {
 			// 必须有fields且为1
 			if len(args) == 0 || args[0].Type() != _fields {
@@ -552,9 +614,22 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 
 		fieldEscape(sb, t.Name)
 
+		// 处理 args，自动将 ormCond 和 ormCondEx 包装为 whereItem
 		for _, arg := range args {
-			arg.BuildSQL(sb)
-			arg.BuildArgs(&stmtArgs)
+			// 如果 arg 是 ormCondEx，自动包装为 whereItem
+			if condEx, ok := arg.(*ormCondEx); ok {
+				whereItem := &whereItem{Conds: []interface{}{condEx}}
+				whereItem.BuildSQL(sb)
+				whereItem.BuildArgs(&stmtArgs)
+			} else if cond, ok := arg.(*ormCond); ok {
+				// 如果 arg 是 ormCond，自动包装为 whereItem
+				whereItem := &whereItem{Conds: []interface{}{cond}}
+				whereItem.BuildSQL(sb)
+				whereItem.BuildArgs(&stmtArgs)
+			} else {
+				arg.BuildSQL(sb)
+				arg.BuildArgs(&stmtArgs)
+			}
 		}
 
 		item.SQL = sb.String()
@@ -575,28 +650,81 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		// fire
 		if rtElem.Kind() == reflect.Map {
 			// Map类型需要特殊处理
-			values := make([]interface{}, len(item.Cols))
-			for i := range values {
-				values[i] = &values[i]
-			}
+			// 如果没有指定Fields（使用SELECT *），需要从查询结果获取列名
+			if len(item.Fields) == 0 {
+				rows, err := t.DB.QueryContext(t.ctx, item.SQL, stmtArgs...)
+				if err != nil {
+					return 0, err
+				}
+				defer rows.Close()
 
-			err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(values...)
-			if err != nil {
-				if err == sql.ErrNoRows {
+				columns, err := rows.Columns()
+				if err != nil {
+					return 0, err
+				}
+
+				item.Fields = columns
+				values := make([]interface{}, len(columns))
+				for i := range values {
+					values[i] = &values[i]
+				}
+
+				if rows.Next() {
+					err = rows.Scan(values...)
+					if err != nil {
+						return 0, err
+					}
+
+					// 构建map
+					mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
+					for i, field := range item.Fields {
+						var val interface{}
+						if ptr, ok := values[i].(*interface{}); ok {
+							val = *ptr
+						} else {
+							// 如果不是 *interface{}，直接使用值
+							val = values[i]
+						}
+						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(val))
+					}
+
+					// 设置到结果
+					reflect.ValueOf(res).Elem().Set(mapVal)
+					return 1, nil
+				} else {
 					return 0, nil
 				}
-				return 0, err
-			}
+			} else {
+				// 使用指定的Fields
+				values := make([]interface{}, len(item.Cols))
+				for i := range values {
+					values[i] = &values[i]
+				}
 
-			// 构建map
-			mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
-			for i, field := range item.Fields {
-				mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
-			}
+				err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(values...)
+				if err != nil {
+					if err == sql.ErrNoRows {
+						return 0, nil
+					}
+					return 0, err
+				}
 
-			// 设置到结果
-			reflect.ValueOf(res).Elem().Set(mapVal)
-			return 1, nil
+				// 构建map
+				mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
+				for i, field := range item.Fields {
+					// values[i] 是 *interface{}，需要解引用
+					if ptr, ok := values[i].(*interface{}); ok {
+						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(*ptr))
+					} else {
+						// 如果不是指针，直接使用
+						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
+					}
+				}
+
+				// 设置到结果
+				reflect.ValueOf(res).Elem().Set(mapVal)
+				return 1, nil
+			}
 		} else {
 			err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(item.Cols...)
 			if err != nil {
@@ -605,6 +733,28 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				}
 				return 0, err
 			}
+
+			// 如果是指针的指针（如 **User），需要创建对象并设置
+			if isPtrPtr && rtElem.Kind() == reflect.Struct {
+				// item.Elem 已经是新创建的对象，现在需要将其设置到指针的指针中
+				// res 是 **User，需要设置 *User
+				rvRes := reflect.ValueOf(res)
+				if rvRes.Kind() == reflect.Ptr && !rvRes.IsNil() {
+					// 创建 *User 对象（指向 User 的指针）
+					newPtr := reflect.New(rtElem.Type1())
+					// 将 item.Elem 的数据复制到 newPtr 指向的对象
+					// item.Elem 是 User 类型（值），newPtr.Elem() 也是 User 类型（值）
+					elemVal := reflect.ValueOf(item.Elem)
+					if elemVal.Kind() == reflect.Ptr {
+						newPtr.Elem().Set(elemVal.Elem())
+					} else {
+						newPtr.Elem().Set(elemVal)
+					}
+					// 设置到 res（**User）
+					rvRes.Elem().Set(newPtr)
+				}
+			}
+
 			return 1, err
 		}
 	}
@@ -614,12 +764,23 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
+
+	// 如果没有指定Fields（使用SELECT *），需要从查询结果获取列名
+	if rtElem.Kind() == reflect.Map && len(item.Fields) == 0 {
+		columns, err := rows.Columns()
+		if err != nil {
+			return 0, err
+		}
+		item.Fields = columns
+		item.Cols = make([]interface{}, len(columns))
+	}
 
 	count := 0
 	for rows.Next() {
 		if rtElem.Kind() == reflect.Map {
 			// Map类型需要特殊处理
-			values := make([]interface{}, len(item.Cols))
+			values := make([]interface{}, len(item.Fields))
 			for i := range values {
 				values[i] = &values[i]
 			}
@@ -632,7 +793,11 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 			// 构建map
 			mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
 			for i, field := range item.Fields {
-				mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
+				if ptr, ok := values[i].(*interface{}); ok {
+					mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(*ptr))
+				} else {
+					mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
+				}
 			}
 
 			// 添加到slice
@@ -699,8 +864,21 @@ func (t *ZormTable) Insert(objs interface{}, args ...ZormItem) (int, error) {
 }
 
 func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (int, error) {
+	// 检查 nil 指针
+	if objs == nil {
+		return 0, errors.New("cannot insert nil pointer")
+	}
+
+	// 使用反射检查是否为 nil 指针
+	rv := reflect.ValueOf(objs)
+	if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return 0, errors.New("cannot insert nil pointer")
+	}
+
 	var (
 		rt         = reflect2.TypeOf(objs)
+		rtOrig     = rt          // 保存原始类型，用于判断 objs 是否已经是指针
+		rtSlice    reflect2.Type // 保存切片类型，用于后续操作
 		isArray    bool
 		isPtrArray bool
 		rtPtr      reflect2.Type
@@ -766,6 +944,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			rt = rt.(reflect2.PtrType).Elem()
 			rtElem = rt
 			if rt.Kind() == reflect.Slice {
+				rtSlice = rt // 保存切片类型
 				rtElem = rtElem.(reflect2.ListType).Elem()
 				isArray = true
 
@@ -783,6 +962,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			rt = reflect2.TypeOf(objs)
 		case reflect.Slice:
 			// 支持非指针切片
+			rtSlice = rt // 保存切片类型
 			rtElem = rt.(reflect2.ListType).Elem()
 			isArray = true
 
@@ -805,7 +985,9 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 
 				// 获取第一个map来确定字段
 				firstMapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), 0)
-				firstMapVal := reflect.ValueOf(firstMapPtr)
+				// UnsafeGetIndex 返回的是 map 的指针，需要转换为实际的 map 值
+				firstMapVal := mapType.UnsafeIndirect(firstMapPtr)
+				firstMapReflectVal := reflect.ValueOf(firstMapVal)
 
 				// 检查是否有Fields参数
 				var fields []string
@@ -813,7 +995,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					fields = args[0].(*fieldsItem).Fields
 				} else {
 					// 从第一个map中提取所有字段
-					mapIter := firstMapVal.MapRange()
+					mapIter := firstMapReflectVal.MapRange()
 					for mapIter.Next() {
 						fields = append(fields, mapIter.Key().String())
 					}
@@ -853,12 +1035,15 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 
 					// 获取当前map
 					mapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), i)
-					mapVal := reflect.ValueOf(mapPtr)
+					// UnsafeGetIndex 返回的是 map 的指针，需要转换为实际的 map 值
+					mapVal := mapType.UnsafeIndirect(mapPtr)
+					mapReflectVal := reflect.ValueOf(mapVal)
 
 					// 构建参数
 					for _, field := range fields {
-						if mapVal.MapIndex(reflect.ValueOf(field)).IsValid() {
-							stmtArgs = append(stmtArgs, mapVal.MapIndex(reflect.ValueOf(field)).Interface())
+						fieldVal := mapReflectVal.MapIndex(reflect.ValueOf(field))
+						if fieldVal.IsValid() {
+							stmtArgs = append(stmtArgs, fieldVal.Interface())
 						} else {
 							stmtArgs = append(stmtArgs, nil)
 						}
@@ -1043,12 +1228,12 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		// inputArgs objs
 		if isArray {
 			// 数组
-			for i := 0; i < rt.(reflect2.SliceType).UnsafeLengthOf(reflect2.PtrOf(objs)); i++ {
+			for i := 0; i < rtSlice.(reflect2.SliceType).UnsafeLengthOf(reflect2.PtrOf(objs)); i++ {
 				if i > 0 {
 					sb.WriteString(",")
 				}
 				sb.WriteString(sbTmp.String())
-				t.inputArgs(&stmtArgs, cols, rtPtr, s, isPtrArray, rt.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
+				t.inputArgs(&stmtArgs, cols, rtPtr, s, isPtrArray, rtSlice.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
 			}
 			putSQLBuilder(sbTmp) // 释放临时构建器
 		} else {
@@ -1091,7 +1276,35 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		// 首先尝试使用新的自增主键字段
 		if autoField := t.getAutoIncrementField(s); autoField != nil {
 			id, _ := res.LastInsertId()
-			autoField.UnsafeSet(reflect2.PtrOf(objs), reflect2.PtrOf(id))
+			// 尝试使用 reflect2 设置，如果失败则使用 reflect 包
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// 使用 reflect 包设置字段值（支持嵌入结构体）
+						rv := reflect.ValueOf(objs).Elem()
+						fieldVal := rv.FieldByName(autoField.Name())
+						if !fieldVal.IsValid() {
+							// 如果直接字段名找不到，尝试在嵌入结构体中查找
+							for i := 0; i < rv.NumField(); i++ {
+								field := rv.Type().Field(i)
+								if field.Anonymous {
+									embeddedVal := rv.Field(i)
+									if embeddedVal.Kind() == reflect.Struct {
+										fieldVal = embeddedVal.FieldByName(autoField.Name())
+										if fieldVal.IsValid() {
+											break
+										}
+									}
+								}
+							}
+						}
+						if fieldVal.IsValid() && fieldVal.CanSet() {
+							fieldVal.SetInt(id)
+						}
+					}
+				}()
+				autoField.UnsafeSet(reflect2.PtrOf(objs), reflect2.PtrOf(id))
+			}()
 		} else if f := s.FieldByName("ZormLastId"); f != nil {
 			// 向后兼容：支持旧的 ZormLastId 字段
 			id, _ := res.LastInsertId()
@@ -1101,15 +1314,28 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		// 处理批量插入的自增ID设置
 		s := rtElem.(reflect2.StructType)
 		if autoField := t.getAutoIncrementField(s); autoField != nil {
-			slice := rt.(reflect2.SliceType)
-			length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
+			slice := rtSlice.(reflect2.SliceType)
+			// 获取 slice 的指针
+			// 使用与构建参数时相同的方式：reflect2.PtrOf(objs)
+			// 注意：在 line 1052 和 1057，构建参数时使用的是 reflect2.PtrOf(objs)
+			// 为了保持一致，这里也使用相同的方式
+			// reflect2.PtrOf 对于指针类型会返回指针本身的值（即指针指向的地址）
+			// 对于 *[]User，reflect2.PtrOf(objs) 返回的是 []User 的地址，这正是我们需要的
+			slicePtr := reflect2.PtrOf(objs)
+			length := slice.UnsafeLengthOf(slicePtr)
 			lastInsertId, _ := res.LastInsertId()
 			// 为每个对象设置自增ID（假设是连续的自增ID）
 			for i := 0; i < length; i++ {
-				ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+				ptr := slice.UnsafeGetIndex(slicePtr, i)
 				if isPtrArray {
-					// 指针数组：ptr 已经是指针
-					autoField.UnsafeSet(ptr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+					// 指针数组：对于 []*User，ptr 是指向元素的地址（即 &slice[i]）
+					// slice[i] 的类型是 *User，所以 ptr 是 **User
+					// 我们需要先解引用获取 *User 的值
+					elemPtr := *(*unsafe.Pointer)(ptr)
+					// 如果 slice 中的元素是 nil，elemPtr 就是 nil
+					if elemPtr != nil {
+						autoField.UnsafeSet(elemPtr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+					}
 				} else {
 					// 值数组：需要获取指针
 					autoField.UnsafeSet(reflect2.PtrOf(ptr), reflect2.PtrOf(lastInsertId-int64(length-i-1)))
@@ -1117,13 +1343,33 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			}
 		} else if f := s.FieldByName("ZormLastId"); f != nil {
 			// 向后兼容：支持旧的 ZormLastId 字段
-			slice := rt.(reflect2.SliceType)
-			length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
+			slice := rtSlice.(reflect2.SliceType)
+			// 获取 slice 的指针
+			var slicePtr unsafe.Pointer
+			if rtOrig.Kind() == reflect.Ptr {
+				// objs 是 *[]User，objs 本身的值就是指向 []User 的指针
+				rv := reflect.ValueOf(objs)
+				if rv.Kind() == reflect.Ptr {
+					slicePtr = unsafe.Pointer(rv.Elem().UnsafeAddr())
+				} else {
+					slicePtr = reflect2.PtrOf(objs)
+				}
+			} else {
+				slicePtr = reflect2.PtrOf(objs)
+			}
+			length := slice.UnsafeLengthOf(slicePtr)
 			lastInsertId, _ := res.LastInsertId()
 			for i := 0; i < length; i++ {
-				ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+				ptr := slice.UnsafeGetIndex(slicePtr, i)
 				if isPtrArray {
-					f.UnsafeSet(ptr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+					// 指针数组：对于 []*User，ptr 是指向元素的地址（即 &slice[i]）
+					// slice[i] 的类型是 *User，所以 ptr 是 **User
+					// 我们需要先解引用获取 *User 的值
+					elemPtr := *(*unsafe.Pointer)(ptr)
+					// 如果 slice 中的元素是 nil，elemPtr 就是 nil
+					if elemPtr != nil {
+						f.UnsafeSet(elemPtr, reflect2.PtrOf(lastInsertId-int64(length-i-1)))
+					}
 				} else {
 					f.UnsafeSet(reflect2.PtrOf(ptr), reflect2.PtrOf(lastInsertId-int64(length-i-1)))
 				}
@@ -1285,6 +1531,10 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 					fields := args[0].(*fieldsItem).Fields
 					for i, name := range fields {
 						f := m[name]
+						if f == nil {
+							putSQLBuilder(sb)
+							return 0, errors.New("field not found: " + name)
+						}
 						if i > 0 {
 							sb.WriteString(",")
 						}
@@ -1303,6 +1553,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 					item.Fields = fields
 					args = args[1:]
 				} else {
+					// 如果没有 Fields，更新所有字段（除了被忽略的）
 					argCnt := 0
 					for i := 0; i < s.NumField(); i++ {
 						f := s.Field(i)
@@ -1311,6 +1562,10 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 							continue
 						}
 						if ft == "-" {
+							continue
+						}
+						// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+						if f.Name() == "ZormLastId" {
 							continue
 						}
 						if argCnt > 0 {
@@ -1344,6 +1599,10 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						if ft == "-" {
 							continue
 						}
+						// 忽略 ZormLastId 字段
+						if f.Name() == "ZormLastId" {
+							continue
+						}
 						if ft == "" {
 							item.Fields[idx] = f.Name()
 						} else {
@@ -1357,8 +1616,29 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 			}
 		}
 
-		// 处理Where条件
+		// 合并多个 Where 为一个 WHERE 子句
+		var whereItems []*whereItem
+		var otherArgs []ZormItem
 		for _, arg := range args {
+			if w, ok := arg.(*whereItem); ok {
+				whereItems = append(whereItems, w)
+			} else {
+				otherArgs = append(otherArgs, arg)
+			}
+		}
+
+		// 如果有多个 Where，合并它们
+		if len(whereItems) > 0 {
+			mergedWhere := &whereItem{}
+			for _, w := range whereItems {
+				mergedWhere.Conds = append(mergedWhere.Conds, w.Conds...)
+			}
+			mergedWhere.BuildSQL(sb)
+			mergedWhere.BuildArgs(&stmtArgs)
+		}
+
+		// 处理其他参数
+		for _, arg := range otherArgs {
 			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
@@ -1432,7 +1712,29 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 		sb.WriteString("delete from ")
 		fieldEscape(sb, t.Name)
 
+		// 合并多个 Where 为一个 WHERE 子句
+		var whereItems []*whereItem
+		var otherArgs []ZormItem
 		for _, arg := range args {
+			if w, ok := arg.(*whereItem); ok {
+				whereItems = append(whereItems, w)
+			} else {
+				otherArgs = append(otherArgs, arg)
+			}
+		}
+
+		// 如果有多个 Where，合并它们
+		if len(whereItems) > 0 {
+			mergedWhere := &whereItem{}
+			for _, w := range whereItems {
+				mergedWhere.Conds = append(mergedWhere.Conds, w.Conds...)
+			}
+			mergedWhere.BuildSQL(sb)
+			mergedWhere.BuildArgs(&stmtArgs)
+		}
+
+		// 处理其他参数
+		for _, arg := range otherArgs {
 			arg.BuildSQL(sb)
 			arg.BuildArgs(&stmtArgs)
 		}
@@ -1475,6 +1777,13 @@ func (t *ZormTable) Exec(query string, args ...interface{}) (int, error) {
 		log.Println(query, args)
 	}
 
+	// 检查是否是 SELECT 语句，SELECT 语句不应该使用 Exec
+	queryTrimmed := strings.TrimSpace(strings.ToUpper(query))
+	if strings.HasPrefix(queryTrimmed, "SELECT") {
+		// SELECT 语句返回 0 行受影响
+		return 0, nil
+	}
+
 	res, err := t.DB.ExecContext(t.ctx, query, args...)
 	if err != nil {
 		return 0, err
@@ -1485,20 +1794,84 @@ func (t *ZormTable) Exec(query string, args ...interface{}) (int, error) {
 }
 
 func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
+	// 使用 reflect 包获取结构体值，以便正确处理嵌入结构体
+	var rv reflect.Value
+	if ptr {
+		// 对于指针类型，x 可能是指向指针的指针（如 **User），需要先解引用
+		// 先获取 *User 的值
+		ptrVal := *(*unsafe.Pointer)(x)
+		if ptrVal == nil {
+			// 如果指针为 nil，无法获取字段值，为每个字段添加 nil
+			for range cols {
+				*stmtArgs = append(*stmtArgs, nil)
+			}
+			return
+		}
+		// 现在 ptrVal 是 *User，使用 rtPtr 来 PackEFace 获取 *User 的值
+		structPtr := rtPtr.PackEFace(ptrVal)
+		rv = reflect.ValueOf(structPtr)
+		// 确保 rv 不是指针，如果是则解引用
+		for rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				// 如果指针为 nil，为每个字段添加 nil
+				for range cols {
+					*stmtArgs = append(*stmtArgs, nil)
+				}
+				return
+			}
+			rv = rv.Elem()
+		}
+	} else {
+		// 对于值类型，直接获取
+		structVal := s.PackEFace(x)
+		rv = reflect.ValueOf(structVal)
+		// 确保 rv 不是指针，如果是则解引用
+		for rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return
+			}
+			rv = rv.Elem()
+		}
+	}
+	
 	for _, col := range cols {
 		var v interface{}
-		if ptr {
-			v = col.Get(rtPtr.UnsafeIndirect(x))
-		} else {
-			v = col.Get(s.PackEFace(x))
+		
+		// 使用 reflect 包获取字段值（支持嵌入结构体）
+		fieldVal := rv.FieldByName(col.Name())
+		if !fieldVal.IsValid() {
+			// 如果直接字段名找不到，尝试在嵌入结构体中查找
+			for i := 0; i < rv.NumField(); i++ {
+				field := rv.Type().Field(i)
+				if field.Anonymous {
+					embeddedVal := rv.Field(i)
+					if embeddedVal.Kind() == reflect.Struct {
+						fieldVal = embeddedVal.FieldByName(col.Name())
+						if fieldVal.IsValid() {
+							break
+						}
+					}
+				}
+			}
+		}
+		if fieldVal.IsValid() {
+			v = fieldVal.Interface()
 		}
 
 		// 时间类型特殊处理
 		if col.Type().String() == "time.Time" {
 			if t.Cfg.ToTimestamp {
-				v = v.(*time.Time).UTC().Unix()
+				if timePtr, ok := v.(*time.Time); ok {
+					v = timePtr.UTC().Unix()
+				} else if timeVal, ok := v.(time.Time); ok {
+					v = timeVal.UTC().Unix()
+				}
 			} else {
-				v = v.(*time.Time).UTC().Format(_timeLayout)
+				if timePtr, ok := v.(*time.Time); ok {
+					v = timePtr.UTC().Format(_timeLayout)
+				} else if timeVal, ok := v.(time.Time); ok {
+					v = timeVal.UTC().Format(_timeLayout)
+				}
 			}
 		}
 
@@ -1630,6 +2003,11 @@ func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]refl
 			continue
 		}
 
+		// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+		if f.Name() == "ZormLastId" {
+			continue
+		}
+
 		// 处理embedded struct
 		if f.Anonymous() && f.Type().Kind() == reflect.Struct {
 			embeddedStruct := f.Type().(reflect2.StructType)
@@ -1679,10 +2057,20 @@ func isAutoIncrementField(f reflect2.StructField) bool {
 	return false
 }
 
-// getAutoIncrementField 获取自增主键字段
+// getAutoIncrementField 获取自增主键字段（支持嵌入结构体）
 func (t *ZormTable) getAutoIncrementField(s reflect2.StructType) reflect2.StructField {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
+		
+		// 处理嵌入结构体
+		if f.Anonymous() && f.Type().Kind() == reflect.Struct {
+			embeddedStruct := f.Type().(reflect2.StructType)
+			if autoField := t.getAutoIncrementField(embeddedStruct); autoField != nil {
+				return autoField
+			}
+			continue
+		}
+		
 		if isAutoIncrementField(f) {
 			return f
 		}
@@ -1705,6 +2093,11 @@ func (t *ZormTable) collectFieldsForInsertWithPrefix(s reflect2.StructType, sb *
 
 		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
+			continue
+		}
+
+		// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+		if f.Name() == "ZormLastId" {
 			continue
 		}
 
@@ -1763,6 +2156,11 @@ func (t *ZormTable) collectStructFieldsGeneric(s reflect2.StructType, sb *string
 
 		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
+			continue
+		}
+
+		// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
+		if f.Name() == "ZormLastId" {
 			continue
 		}
 
@@ -1975,6 +2373,24 @@ func (w *joinItem) BuildSQL(sb *strings.Builder) {
 			if s, ok := w.On[0].(string); ok {
 				// 字符串格式：直接使用
 				sb.WriteString(s)
+			} else if whereItem, ok := w.On[0].(*whereItem); ok {
+				// 如果是 whereItem，提取其条件并构建 ON 子句
+				for i, c := range whereItem.Conds {
+					if i > 0 {
+						sb.WriteString(" AND ")
+					}
+					if cond, ok := c.(*ormCond); ok {
+						cond.BuildSQL(sb)
+					} else if condEx, ok := c.(*ormCondEx); ok {
+						if len(condEx.Conds) > 1 {
+							sb.WriteString("(")
+						}
+						condEx.BuildSQL(sb)
+						if len(condEx.Conds) > 1 {
+							sb.WriteString(")")
+						}
+					}
+				}
 			} else {
 				// 条件对象格式：使用类似 Where 的处理
 				for i, cond := range w.On {
@@ -2005,6 +2421,15 @@ func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {
 			// 字符串格式：检查是否有占位符参数
 			if len(w.On) > 1 {
 				*stmtArgs = append(*stmtArgs, w.On[1:]...)
+			}
+		} else if whereItem, ok := w.On[0].(*whereItem); ok {
+			// 如果是 whereItem，提取其条件并构建参数
+			for _, c := range whereItem.Conds {
+				if cond, ok := c.(*ormCond); ok {
+					cond.BuildArgs(stmtArgs)
+				} else if condEx, ok := c.(*ormCondEx); ok {
+					condEx.BuildArgs(stmtArgs)
+				}
 			}
 		} else {
 			// 条件对象格式：处理条件中的参数
@@ -2997,18 +3422,12 @@ type ReadWriteDB struct {
 
 // DDLConfig DDL configuration
 type DDLConfig struct {
-	Engine           string // Storage engine, e.g., InnoDB
-	Charset          string // Character set, e.g., utf8mb4
-	Collate          string // Collation, e.g., utf8mb4_unicode_ci
-	SchemaManagement bool   // Whether to enable schema management
+	SchemaManagement bool // Whether to enable schema management
 }
 
-// DefaultDDLConfig returns default DDL configuration
+// DefaultDDLConfig returns default DDL configuration for SQLite
 func DefaultDDLConfig() *DDLConfig {
 	return &DDLConfig{
-		Engine:           "InnoDB",
-		Charset:          "utf8mb4",
-		Collate:          "utf8mb4_unicode_ci",
 		SchemaManagement: true,
 	}
 }
@@ -3178,21 +3597,6 @@ func generateCreateTableSQL(tableName string, model interface{}, config *DDLConf
 	}
 
 	sb.WriteString("\n)")
-
-	// Add table options (MySQL fallback, SQLite ignores these)
-	// SQLite is prioritized, MySQL options are added for compatibility
-	if config.Engine != "" {
-		sb.WriteString(" ENGINE=")
-		sb.WriteString(config.Engine)
-	}
-	if config.Charset != "" {
-		sb.WriteString(" DEFAULT CHARSET=")
-		sb.WriteString(config.Charset)
-	}
-	if config.Collate != "" {
-		sb.WriteString(" COLLATE=")
-		sb.WriteString(config.Collate)
-	}
 
 	return sb.String(), nil
 }
