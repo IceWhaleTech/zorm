@@ -770,6 +770,112 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			// 支持非指针切片
 			rtElem = rt.(reflect2.ListType).Elem()
 			isArray = true
+			
+			// 检查是否是slice of maps ([]V)
+			if rtElem.Kind() == reflect.Map {
+				// 处理slice of maps
+				mapType := rtElem.(reflect2.MapType)
+				keyType := mapType.Key()
+				
+				// 只支持string key的map
+				if keyType.Kind() != reflect.String {
+					return 0, errors.New("map key must be string type")
+				}
+				
+				sliceType := rt.(reflect2.SliceType)
+				sliceLen := sliceType.UnsafeLengthOf(reflect2.PtrOf(objs))
+				if sliceLen == 0 {
+					return 0, errors.New("empty slice")
+				}
+				
+				// 获取第一个map来确定字段
+				firstMapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), 0)
+				firstMapVal := reflect.ValueOf(firstMapPtr)
+				
+				// 检查是否有Fields参数
+				var fields []string
+				if len(args) > 0 && args[0].Type() == _fields {
+					fields = args[0].(*fieldsItem).Fields
+				} else {
+					// 从第一个map中提取所有字段
+					mapIter := firstMapVal.MapRange()
+					for mapIter.Next() {
+						fields = append(fields, mapIter.Key().String())
+					}
+					// 排序字段以确保顺序一致
+					sort.Strings(fields)
+				}
+				
+				if len(fields) == 0 {
+					return 0, errors.New("no fields found in map")
+				}
+				
+				// 构建字段列表
+				for i, field := range fields {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					fieldEscape(sb, field)
+				}
+				sb.WriteString(") values ")
+				
+				// 构建VALUES部分
+				valuePlaceholder := "("
+				for i := range fields {
+					if i > 0 {
+						valuePlaceholder += ","
+					}
+					valuePlaceholder += "?"
+				}
+				valuePlaceholder += ")"
+				
+				// 为每个map构建values
+				for i := 0; i < sliceLen; i++ {
+					if i > 0 {
+						sb.WriteString(",")
+					}
+					sb.WriteString(valuePlaceholder)
+					
+					// 获取当前map
+					mapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+					mapVal := reflect.ValueOf(mapPtr)
+					
+					// 构建参数
+					for _, field := range fields {
+						if mapVal.MapIndex(reflect.ValueOf(field)).IsValid() {
+							stmtArgs = append(stmtArgs, mapVal.MapIndex(reflect.ValueOf(field)).Interface())
+						} else {
+							stmtArgs = append(stmtArgs, nil)
+						}
+					}
+				}
+				
+				// 处理额外的args
+				argStart := 0
+				if len(args) > 0 && args[0].Type() == _fields {
+					argStart = 1
+				}
+				for i := argStart; i < len(args); i++ {
+					args[i].BuildSQL(sb)
+					args[i].BuildArgs(&stmtArgs)
+				}
+				
+				// 执行SQL
+				result, err := t.DB.ExecContext(t.ctx, sb.String(), stmtArgs...)
+				if err != nil {
+					return 0, err
+				}
+				
+				affected, err := result.RowsAffected()
+				if err != nil {
+					return 0, err
+				}
+				
+				putSQLBuilder(sb) // 释放字符串构建器
+				return int(affected), nil
+			}
+			
+			// 处理slice of structs
 			if rtElem.Kind() == reflect.Ptr {
 				rtPtr = rtElem
 				rtElem = rtElem.(reflect2.PtrType).Elem()

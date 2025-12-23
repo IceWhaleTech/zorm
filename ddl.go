@@ -451,19 +451,21 @@ func (dm *DDLManager) getColumns(ctx context.Context, tableName string) (map[str
 			var name, dataType string
 			var notNull, pk int
 			var defaultValue sql.NullString
-			var autoIncrement int
 
-			err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk, &autoIncrement)
+			err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk)
 			if err != nil {
 				return nil, err
 			}
+
+			// Check if column is auto increment (PRIMARY KEY with INTEGER type)
+			isAutoIncr := pk == 1 && (dataType == "INTEGER" || strings.HasPrefix(strings.ToUpper(dataType), "INTEGER"))
 
 			columns[name] = &ColumnDef{
 				Name:          name,
 				Type:          dataType,
 				Nullable:      notNull == 0,
 				DefaultValue:  defaultValue.String,
-				AutoIncrement: autoIncrement == 1,
+				AutoIncrement: isAutoIncr,
 			}
 		}
 		return columns, nil
@@ -534,7 +536,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 			var origin string
 			var partial int
 
-			err := rows.Scan(&seq, &name, &origin, &unique, &partial)
+			err := rows.Scan(&seq, &name, &unique, &origin, &partial)
 			if err != nil {
 				return nil, err
 			}
