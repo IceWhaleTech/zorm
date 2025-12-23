@@ -10,9 +10,9 @@ blocks:
       jobs:
         - name: go test
           commands:
-            - sem-version go 1.21
+            - sem-version go 1.18
             - export GOPATH=~/go
-            - "export PATH=/home/semaphore/go/bin:$PATH"
+            - 'export PATH=/home/semaphore/go/bin:$PATH'
             - checkout
             - go get -t -d -v ./... && go build -v ./...
             - go test -coverprofile=coverage.txt -covermode=atomic -v ./...
