@@ -3,8 +3,8 @@
 
 [![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat)](https://github.com/IceWhaleTech/zorm/blob/master/LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/zorm)](https://goreportcard.com/report/github.com/IceWhaleTech/zorm)
-[![Build Status](https://orca-zhang.semaphoreci.com/badges/zorm/branches/master.svg?style=shields)](https://orca-zhang.semaphoreci.com/projects/zorm)
-[![codecov](https://codecov.io/github/IceWhaleTech/zorm/graph/badge.svg?token=QAXfxhPiur)](https://codecov.io/github/IceWhaleTech/zorm)
+[![Build Status](https://orca-zhang.semaphoreci.com/badges/zorm/branches/main.svg?style=shields)](https://orca-zhang.semaphoreci.com/projects/zorm)
+[![codecov](https://codecov.io/github/IceWhaleTech/zorm/branch/main/graph/badge.svg?token=QAXfxhPiur)](https://codecov.io/github/IceWhaleTech/zorm)
 
 🏎️ 用Go开发的简单、超快、可自测试的Zima ORM
 

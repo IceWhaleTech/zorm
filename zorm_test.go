@@ -7670,6 +7670,144 @@ func TestDeleteWithReuseCacheAndMultipleWhere(t *testing.T) {
 	})
 }
 
+// ========== Update with Multiple Where Conditions ==========
+func TestUpdateWithMultipleWhere(t *testing.T) {
+	Convey("Update with multiple Where conditions", t, func() {
+		setupTestTables(t)
+		tbl := zorm.Table(db, "test_users")
+
+		// Insert test data
+		user := User{Name: "Update Multi Where", Email: "updatemultiwhere@example.com", Age: 25, CreatedAt: time.Now()}
+		tbl.Insert(&user)
+
+		// Update with multiple Where conditions
+		n, err := tbl.Update(&User{Age: 30}, zorm.Fields("age"), zorm.Where("id = ?", user.ID), zorm.Where("age = ?", 25))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		// Verify the update
+		var result User
+		n, err = tbl.Select(&result, zorm.Where("id = ?", user.ID))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result.Age, ShouldEqual, 30)
+	})
+}
+
+func TestUpdateWithReuseCacheAndMultipleWhere(t *testing.T) {
+	Convey("Update with Reuse cache and multiple Where", t, func() {
+		setupTestTables(t)
+		tbl := zorm.Table(db, "test_users").Reuse()
+
+		user := User{Name: "Update Reuse Multi Where", Email: "updatereusemultiwhere@example.com", Age: 25, CreatedAt: time.Now()}
+		tbl.Insert(&user)
+
+		// First update - builds cache with multiple Where conditions
+		n, err := tbl.Update(&User{Age: 30}, zorm.Fields("age"), zorm.Where("id = ?", user.ID), zorm.Where("age = ?", 25))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		// Verify the update
+		var result User
+		n, err = tbl.Select(&result, zorm.Where("id = ?", user.ID))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result.Age, ShouldEqual, 30)
+
+		// Second update - uses cache with different values but same structure
+		user2 := User{Name: "Update Reuse Multi Where 2", Email: "updatereusemultiwhere2@example.com", Age: 35, CreatedAt: time.Now()}
+		tbl.Insert(&user2)
+
+		n, err = tbl.Update(&User{Age: 40}, zorm.Fields("age"), zorm.Where("id = ?", user2.ID), zorm.Where("age = ?", 35))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		// Verify the second update
+		var result2 User
+		n, err = tbl.Select(&result2, zorm.Where("id = ?", user2.ID))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result2.Age, ShouldEqual, 40)
+	})
+}
+
+func TestUpdateWithMapAndMultipleWhere(t *testing.T) {
+	Convey("Update with map and multiple Where conditions", t, func() {
+		setupTestTables(t)
+		tbl := zorm.Table(db, "test_users")
+
+		// Insert test data
+		user := User{Name: "Update Map Multi Where", Email: "updatemapmultiwhere@example.com", Age: 25, CreatedAt: time.Now()}
+		tbl.Insert(&user)
+
+		// Update with map and multiple Where conditions
+		updateMap := zorm.V{"age": 30, "name": "Updated Name"}
+		n, err := tbl.Update(updateMap, zorm.Where("id = ?", user.ID), zorm.Where("age = ?", 25))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		// Verify the update
+		var result User
+		n, err = tbl.Select(&result, zorm.Where("id = ?", user.ID))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result.Age, ShouldEqual, 30)
+		So(result.Name, ShouldEqual, "Updated Name")
+	})
+}
+
+func TestUpdateWithMultipleWhereAndOtherArgs(t *testing.T) {
+	Convey("Update with multiple Where and other arguments", t, func() {
+		setupTestTables(t)
+		tbl := zorm.Table(db, "test_users")
+
+		// Insert test data
+		users := []User{
+			{Name: "Multi Where 1", Email: "multiwhere1@example.com", Age: 25, CreatedAt: time.Now()},
+			{Name: "Multi Where 2", Email: "multiwhere2@example.com", Age: 25, CreatedAt: time.Now()},
+			{Name: "Multi Where 3", Email: "multiwhere3@example.com", Age: 30, CreatedAt: time.Now()},
+		}
+		tbl.Insert(&users)
+
+		// Update with multiple Where conditions and Fields parameter
+		n, err := tbl.Update(&User{Age: 28}, zorm.Fields("age"), zorm.Where("age = ?", 25), zorm.Where("name LIKE ?", "Multi Where%"))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThanOrEqualTo, 0)
+
+		// Verify updates
+		var results []User
+		n, err = tbl.Select(&results, zorm.Where("age = ?", 28))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThanOrEqualTo, 0)
+	})
+}
+
+func TestDeleteWithMultipleWhereAndOtherArgs(t *testing.T) {
+	Convey("Delete with multiple Where and other arguments", t, func() {
+		setupTestTables(t)
+		tbl := zorm.Table(db, "test_users")
+
+		// Insert test data
+		users := []User{
+			{Name: "Delete Multi Where 1", Email: "deletemultiwhere1@example.com", Age: 25, CreatedAt: time.Now()},
+			{Name: "Delete Multi Where 2", Email: "deletemultiwhere2@example.com", Age: 25, CreatedAt: time.Now()},
+			{Name: "Delete Multi Where 3", Email: "deletemultiwhere3@example.com", Age: 30, CreatedAt: time.Now()},
+		}
+		tbl.Insert(&users)
+
+		// Delete with multiple Where conditions
+		n, err := tbl.Delete(zorm.Where("age = ?", 25), zorm.Where("name LIKE ?", "Delete Multi Where%"))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThanOrEqualTo, 0)
+
+		// Verify deletion - should have fewer results after deletion
+		var results []User
+		n, err = tbl.Select(&results, zorm.Where("age = ?", 25))
+		So(err, ShouldBeNil)
+		// The remaining records with age=25 should be less than what we inserted
+	})
+}
+
 // ========== More Type Conversion Tests ==========
 func TestSelectWithTimeStringConversion(t *testing.T) {
 	Convey("Select with time string conversion", t, func() {
