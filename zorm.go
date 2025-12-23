@@ -325,9 +325,7 @@ func IndexedBy(idx string) *indexedByItem {
 
 // Select .
 func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
-	if len(args) <= 0 {
-		return 0, errors.New("argument 2 cannot be omitted")
-	}
+	// Support unconditional queries (no args required)
 
 	var (
 		rt         = reflect2.TypeOf(res)
@@ -382,16 +380,18 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 	if item != nil {
 		// struct类型
 		if rtElem.Kind() == reflect.Struct {
-			if args[0].Type() == _fields {
+			if len(args) > 0 && args[0].Type() == _fields {
 				args = args[1:]
 			}
 		} else if rtElem.Kind() == reflect.Map {
 			// map类型需要Fields，跳过缓存
-			if args[0].Type() == _fields {
+			if len(args) > 0 && args[0].Type() == _fields {
 				args = args[1:]
 			}
 		} else {
-			args = args[1:]
+			if len(args) > 0 {
+				args = args[1:]
+			}
 		}
 
 		for _, arg := range args {
@@ -413,7 +413,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		if rtElem.Kind() == reflect.Struct {
 			s := rtElem.(reflect2.StructType)
 
-			if args[0].Type() == _fields {
+			if len(args) > 0 && args[0].Type() == _fields {
 				m := t.getStructFieldMap(s)
 
 				for _, field := range args[0].(*fieldsItem).Fields {
@@ -465,33 +465,48 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				args = args[1:]
 
 			} else {
+				// 无条件查询：选择所有字段（有zorm tag或UseNameWhenTagEmpty为true）
 				for i := 0; i < s.NumField(); i++ {
 					f := s.Field(i)
 					ft := f.Tag().Get("zorm")
 
+					// 忽略zorm tag为"-"的字段
+					if ft == "-" {
+						continue
+					}
+
+					// 如果没有zorm tag且UseNameWhenTagEmpty为false，跳过
 					if !t.Cfg.UseNameWhenTagEmpty && ft == "" {
+						continue
+					}
+
+					// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
+					dbFieldName := getFieldName(f)
+					if dbFieldName == "" {
+						// 如果字段名为空，跳过该字段
 						continue
 					}
 
 					if len(item.Cols) > 0 {
 						sb.WriteString(",")
 					}
-
-					// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
-					dbFieldName := getFieldName(f)
-					if dbFieldName != "" {
-						fieldEscape(sb, dbFieldName)
-					}
+					fieldEscape(sb, dbFieldName)
 
 					item.Cols = append(item.Cols, &scanner{
 						Type: f.Type(),
 						Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
 					})
 				}
+
+				// 如果没有选择任何字段，返回错误
+				if len(item.Cols) == 0 {
+					putSQLBuilder(sb)
+					return 0, errors.New("no fields to select: struct has no fields with zorm tags or UseNameWhenTagEmpty is false")
+				}
 			}
 		} else if rtElem.Kind() == reflect.Map {
 			// map类型必须指定Fields
-			if args[0].Type() != _fields {
+			if len(args) == 0 || args[0].Type() != _fields {
 				return 0, errors.New("map type requires Fields() to specify columns")
 			}
 
@@ -515,7 +530,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 			args = args[1:]
 		} else {
 			// 必须有fields且为1
-			if args[0].Type() != _fields {
+			if len(args) == 0 || args[0].Type() != _fields {
 				return 0, errors.New("argument 3 need ONE Fields(\"name\") with ONE field")
 			}
 
@@ -770,28 +785,28 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			// 支持非指针切片
 			rtElem = rt.(reflect2.ListType).Elem()
 			isArray = true
-			
+
 			// 检查是否是slice of maps ([]V)
 			if rtElem.Kind() == reflect.Map {
 				// 处理slice of maps
 				mapType := rtElem.(reflect2.MapType)
 				keyType := mapType.Key()
-				
+
 				// 只支持string key的map
 				if keyType.Kind() != reflect.String {
 					return 0, errors.New("map key must be string type")
 				}
-				
+
 				sliceType := rt.(reflect2.SliceType)
 				sliceLen := sliceType.UnsafeLengthOf(reflect2.PtrOf(objs))
 				if sliceLen == 0 {
 					return 0, errors.New("empty slice")
 				}
-				
+
 				// 获取第一个map来确定字段
 				firstMapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), 0)
 				firstMapVal := reflect.ValueOf(firstMapPtr)
-				
+
 				// 检查是否有Fields参数
 				var fields []string
 				if len(args) > 0 && args[0].Type() == _fields {
@@ -805,11 +820,11 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					// 排序字段以确保顺序一致
 					sort.Strings(fields)
 				}
-				
+
 				if len(fields) == 0 {
 					return 0, errors.New("no fields found in map")
 				}
-				
+
 				// 构建字段列表
 				for i, field := range fields {
 					if i > 0 {
@@ -818,7 +833,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					fieldEscape(sb, field)
 				}
 				sb.WriteString(") values ")
-				
+
 				// 构建VALUES部分
 				valuePlaceholder := "("
 				for i := range fields {
@@ -828,18 +843,18 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					valuePlaceholder += "?"
 				}
 				valuePlaceholder += ")"
-				
+
 				// 为每个map构建values
 				for i := 0; i < sliceLen; i++ {
 					if i > 0 {
 						sb.WriteString(",")
 					}
 					sb.WriteString(valuePlaceholder)
-					
+
 					// 获取当前map
 					mapPtr := sliceType.UnsafeGetIndex(reflect2.PtrOf(objs), i)
 					mapVal := reflect.ValueOf(mapPtr)
-					
+
 					// 构建参数
 					for _, field := range fields {
 						if mapVal.MapIndex(reflect.ValueOf(field)).IsValid() {
@@ -849,7 +864,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 						}
 					}
 				}
-				
+
 				// 处理额外的args
 				argStart := 0
 				if len(args) > 0 && args[0].Type() == _fields {
@@ -859,22 +874,22 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					args[i].BuildSQL(sb)
 					args[i].BuildArgs(&stmtArgs)
 				}
-				
+
 				// 执行SQL
 				result, err := t.DB.ExecContext(t.ctx, sb.String(), stmtArgs...)
 				if err != nil {
 					return 0, err
 				}
-				
+
 				affected, err := result.RowsAffected()
 				if err != nil {
 					return 0, err
 				}
-				
+
 				putSQLBuilder(sb) // 释放字符串构建器
 				return int(affected), nil
 			}
-			
+
 			// 处理slice of structs
 			if rtElem.Kind() == reflect.Ptr {
 				rtPtr = rtElem
@@ -2634,8 +2649,10 @@ RETRY:
 			args = argsAux
 			goto RETRY
 		} else {
-			// 单条不用in，用等于
-			return Eq(field, args[0])
+			// 即使只有一个元素也使用IN，保持SQL形状一致，防止缓存失效
+			var sb strings.Builder
+			sb.WriteString(" in (?)")
+			return &ormCond{Field: field, Op: sb.String(), Args: []interface{}{args[0]}}
 		}
 	}
 
