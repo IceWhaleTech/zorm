@@ -200,12 +200,12 @@
    // Insert only partial fields (others use defaults)
    n, err = t.Insert(&o, z.Fields("name", "tag"))
 
-   // Resolve primary key conflicts
-   n, err = t.Insert(&o, z.Fields("name", "tag"),
-      z.OnConflictDoUpdateSet([]string{"id"}, z.V{
-         "name": "new_name",
-         "age":  z.U("age+1"), // Use z.U to handle non-variable updates
-      }))
+   // Resolve primary key conflicts (using excluded values - SQLite UPSERT)
+   // This is SQLite's official UPSERT syntax, equivalent to MySQL's ON DUPLICATE KEY UPDATE
+   // Example: INSERT INTO users (id, name, age) VALUES (1, 'Alice', 18)
+   //          ON CONFLICT(id) DO UPDATE SET name = excluded.name, age = excluded.age;
+   n, err = t.Insert(&o, z.Fields("id", "name", "age"),
+      z.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
 
    // Use map insert (no need to define struct)
    userMap := map[string]interface{}{
@@ -553,7 +553,7 @@ Option usage example:
 
 | Example                                                 | Description                             |
 |---------------------------------------------------------|-----------------------------------------|
-| OnConflictDoUpdateSet([]string{"id"}, V{"name": "new"}) | Update to resolve primary key conflicts |
+| OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}) | SQLite UPSERT syntax using excluded values. Equivalent to MySQL's ON DUPLICATE KEY UPDATE. Uses `excluded.` prefix to reference conflicting row values. |
 
 ### Map Type Support
 

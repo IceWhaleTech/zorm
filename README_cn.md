@@ -199,12 +199,12 @@
    // 只插入部分字段（其他使用缺省）
    n, err = t.Insert(&o, z.Fields("name", "tag"))
 
-   // 解决主键冲突
-   n, err = t.Insert(&o, z.Fields("name", "tag"),
-      z.OnConflictDoUpdateSet([]string{"id"}, z.V{
-         "name": "new_name",
-         "age":  z.U("age+1"), // 使用b.U来处理非变量更新
-      }))
+   // 解决主键冲突（使用 excluded 值 - SQLite UPSERT 语法）
+   // 这是 SQLite 的官方 UPSERT 语法，功能上等价于 MySQL 的 ON DUPLICATE KEY UPDATE
+   // 示例: INSERT INTO users (id, name, age) VALUES (1, 'Alice', 18)
+   //       ON CONFLICT(id) DO UPDATE SET name = excluded.name, age = excluded.age;
+   n, err = t.Insert(&o, z.Fields("id", "name", "age"),
+      z.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
 
    // 使用map插入（无需定义struct）
    userMap := map[string]interface{}{
@@ -546,7 +546,7 @@
 
 |示例|说明|
 |-|-|
-|OnConflictDoUpdateSet([]string{"id"}, V{"name": "new"})|解决主键冲突的更新|
+|OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"})|SQLite UPSERT 语法，使用 excluded 值。功能上等价于 MySQL 的 ON DUPLICATE KEY UPDATE。使用 `excluded.` 前缀来引用冲突行的值。|
 
 ### Map类型支持
 

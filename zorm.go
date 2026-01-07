@@ -283,36 +283,37 @@ func Limit(i ...interface{}) *limitItem {
 	panic("too few or too many limit params")
 }
 
-// OnConflictDoUpdateSet .
-func OnConflictDoUpdateSet(fields []string, keyVals V) *onConflictDoUpdateSetItem {
+// OnConflictDoUpdateSet 支持 SQLite 的 INSERT ... ON CONFLICT DO UPDATE 语法
+// 使用 excluded. 前缀来引用冲突行的值
+// 这是 SQLite 的官方 UPSERT 语法，功能上等价于 MySQL 的 ON DUPLICATE KEY UPDATE
+// 示例：
+//   INSERT INTO users (id, name, age)
+//   VALUES (1, 'Alice', 18)
+//   ON CONFLICT(id) DO UPDATE SET
+//       name = excluded.name,
+//       age  = excluded.age;
+func OnConflictDoUpdateSet(conflictFields []string, updateFields []string) *onConflictDoUpdateSetItem {
 	res := &onConflictDoUpdateSetItem{}
-	if len(keyVals) <= 0 {
+	if len(conflictFields) <= 0 || len(updateFields) <= 0 {
 		return res
 	}
 
 	var sb strings.Builder
 	sb.WriteString(" on conflict(")
-	for i, field := range fields {
+	for i, field := range conflictFields {
 		if i > 0 {
 			sb.WriteString(",")
 		}
 		fieldEscape(&sb, field)
 	}
 	sb.WriteString(") do update set")
-	argCnt := 0
-	for k, v := range keyVals {
-		if argCnt > 0 {
+	for i, field := range updateFields {
+		if i > 0 {
 			sb.WriteString(",")
 		}
-		fieldEscape(&sb, k)
-		if s, ok := v.(U); ok {
-			sb.WriteString("=")
-			sb.WriteString(string(s))
-		} else {
-			sb.WriteString("=?")
-			res.Vals = append(res.Vals, v)
-		}
-		argCnt++
+		fieldEscape(&sb, field)
+		sb.WriteString("=excluded.")
+		fieldEscape(&sb, field)
 	}
 	res.Conds = sb.String()
 	return res
@@ -506,7 +507,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 					args = args[1:]
 				}
 			}
-			
+
 			// 如果没有指定 Fields() 或 Fields() 是空的，使用默认行为
 			if len(args) == 0 || (len(args) > 0 && args[0].Type() != _fields) {
 				// 无条件查询：选择所有字段（有zorm tag或UseNameWhenTagEmpty为true）
@@ -540,7 +541,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 							// 如果字段名为空，跳过该字段
 							continue
 						}
-						
+
 						// 如果没有zorm tag且UseNameWhenTagEmpty为false，但getFieldName返回了字段名（自动转换），仍然包含该字段
 						// 这样可以支持自动驼峰转蛇形的功能
 
@@ -1833,10 +1834,10 @@ func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructFie
 			rv = rv.Elem()
 		}
 	}
-	
+
 	for _, col := range cols {
 		var v interface{}
-		
+
 		// 使用 reflect 包获取字段值（支持嵌入结构体）
 		fieldVal := rv.FieldByName(col.Name())
 		if !fieldVal.IsValid() {
@@ -2061,7 +2062,7 @@ func isAutoIncrementField(f reflect2.StructField) bool {
 func (t *ZormTable) getAutoIncrementField(s reflect2.StructType) reflect2.StructField {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
-		
+
 		// 处理嵌入结构体
 		if f.Anonymous() && f.Type().Kind() == reflect.Struct {
 			embeddedStruct := f.Type().(reflect2.StructType)
@@ -2070,7 +2071,7 @@ func (t *ZormTable) getAutoIncrementField(s reflect2.StructType) reflect2.Struct
 			}
 			continue
 		}
-		
+
 		if isAutoIncrementField(f) {
 			return f
 		}
@@ -2326,7 +2327,6 @@ func (w *fieldsItem) BuildArgs(stmtArgs *[]interface{}) {
 
 type onConflictDoUpdateSetItem struct {
 	Conds string
-	Vals  []interface{}
 }
 
 func (w *onConflictDoUpdateSetItem) Type() int {
@@ -2338,7 +2338,7 @@ func (w *onConflictDoUpdateSetItem) BuildSQL(sb *strings.Builder) {
 }
 
 func (w *onConflictDoUpdateSetItem) BuildArgs(stmtArgs *[]interface{}) {
-	*stmtArgs = append(*stmtArgs, w.Vals...)
+	// OnConflictDoUpdateSet 使用 excluded. 语法，不需要额外的参数
 }
 
 type joinItem struct {

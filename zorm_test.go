@@ -969,7 +969,7 @@ func TestJoinFunctions(t *testing.T) {
 			// First insert
 			conflictTbl.Insert(userMap)
 			// Second insert with conflict
-			n, err := conflictTbl.Insert(userMap, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated Name"}))
+			n, err := conflictTbl.Insert(userMap, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 			So(err, ShouldBeNil)
 			So(n, ShouldBeGreaterThan, 0)
 		})
@@ -2253,13 +2253,13 @@ func TestOnConflictDoUpdateSetComprehensive(t *testing.T) {
 		tbl := zorm.Table(db, "test_conflict")
 
 		user := zorm.V{"email": "conflict@example.com", "name": "Conflict Test"}
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated Name"}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Try to insert again with conflict
 		user2 := zorm.V{"email": "conflict@example.com", "name": "New Name"}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated Name"}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 	})
 }
@@ -5314,14 +5314,100 @@ func TestInsertWithOnConflictDoUpdateSet(t *testing.T) {
 		tbl := zorm.Table(db, "test_conflict_insert")
 		user := zorm.V{"email": "conflictinsert@example.com", "name": "Conflict Insert"}
 
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated Name"}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Try to insert again with conflict
 		user2 := zorm.V{"email": "conflictinsert@example.com", "name": "New Name"}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated Name"}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
+	})
+}
+
+func TestInsertWithOnDuplicateKeyUpdate(t *testing.T) {
+	Convey("Insert with OnDuplicateKeyUpdate", t, func() {
+		db.Exec(`CREATE TABLE IF NOT EXISTS test_duplicate_key_update (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			age INTEGER
+		)`)
+		defer db.Exec("DELETE FROM test_duplicate_key_update")
+
+		tbl := zorm.Table(db, "test_duplicate_key_update")
+		user := zorm.V{"id": 1, "name": "Alice", "age": 18}
+
+		// First insert
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThan, 0)
+
+		// Verify the insert
+		var result map[string]interface{}
+		n, err = tbl.Select(&result, zorm.Where("id = ?", 1))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result["name"], ShouldEqual, "Alice")
+		So(result["age"], ShouldEqual, 18)
+
+		// Try to insert again with conflict - should update using excluded values
+		user2 := zorm.V{"id": 1, "name": "Bob", "age": 25}
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThan, 0)
+
+		// Verify the update
+		n, err = tbl.Select(&result, zorm.Where("id = ?", 1))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result["name"], ShouldEqual, "Bob")
+		So(result["age"], ShouldEqual, 25)
+	})
+}
+
+func TestInsertWithOnDuplicateKeyUpdateWithStruct(t *testing.T) {
+	Convey("Insert with OnDuplicateKeyUpdate using struct", t, func() {
+		type User struct {
+			ID   int64  `zorm:"id"`
+			Name string `zorm:"name"`
+			Age  int    `zorm:"age"`
+		}
+
+		db.Exec(`CREATE TABLE IF NOT EXISTS test_duplicate_key_update_struct (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			age INTEGER
+		)`)
+		defer db.Exec("DELETE FROM test_duplicate_key_update_struct")
+
+		tbl := zorm.Table(db, "test_duplicate_key_update_struct")
+		user := User{ID: 1, Name: "Alice", Age: 18}
+
+		// First insert
+		n, err := tbl.Insert(&user, zorm.Fields("id", "name", "age"), zorm.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThan, 0)
+
+		// Verify the insert
+		var result User
+		n, err = tbl.Select(&result, zorm.Where("id = ?", 1))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result.Name, ShouldEqual, "Alice")
+		So(result.Age, ShouldEqual, 18)
+
+		// Try to insert again with conflict - should update using excluded values
+		user2 := User{ID: 1, Name: "Bob", Age: 25}
+		n, err = tbl.Insert(&user2, zorm.Fields("id", "name", "age"), zorm.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
+		So(err, ShouldBeNil)
+		So(n, ShouldBeGreaterThan, 0)
+
+		// Verify the update
+		n, err = tbl.Select(&result, zorm.Where("id = ?", 1))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+		So(result.Name, ShouldEqual, "Bob")
+		So(result.Age, ShouldEqual, 25)
 	})
 }
 
@@ -5338,7 +5424,7 @@ func TestInsertWithFieldsAndOnConflict(t *testing.T) {
 		tbl := zorm.Table(db, "test_fields_conflict")
 		user := zorm.V{"email": "fieldsconflict@example.com", "name": "Fields Conflict", "age": 25}
 
-		n, err := tbl.Insert(user, zorm.Fields("email", "name"), zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err := tbl.Insert(user, zorm.Fields("email", "name"), zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 	})
@@ -5377,13 +5463,13 @@ func TestInsertWithReuseAndOnConflict(t *testing.T) {
 		user := zorm.V{"email": "reuseconflict@example.com", "name": "Reuse Conflict"}
 
 		// First insert
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Second insert - should use cache
 		user2 := zorm.V{"email": "reuseconflict2@example.com", "name": "Reuse Conflict 2"}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 	})
@@ -6117,13 +6203,13 @@ func TestInsertWithOnConflictDoUpdateSetMultipleFields(t *testing.T) {
 		tbl := zorm.Table(db, "test_conflict_multi")
 		user := zorm.V{"email": "conflictmulti@example.com", "name": "Conflict Multi", "age": 25}
 
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated", "age": 30}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name", "age"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Try to insert again with conflict
 		user2 := zorm.V{"email": "conflictmulti@example.com", "name": "New Name", "age": 35}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated", "age": 30}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name", "age"}))
 		So(err, ShouldBeNil)
 	})
 }
@@ -6141,13 +6227,13 @@ func TestInsertWithReuseCacheAndOnConflict(t *testing.T) {
 		user := zorm.V{"email": "reuseconflict@example.com", "name": "Reuse Conflict"}
 
 		// First insert - builds cache
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Second insert - uses cache
 		user2 := zorm.V{"email": "reuseconflict2@example.com", "name": "Reuse Conflict 2"}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 	})
@@ -7145,13 +7231,13 @@ func TestInsertWithReuseCacheAndOnConflictAdditional(t *testing.T) {
 		user := zorm.V{"email": "reuseonconflictadditional@example.com", "name": "Reuse OnConflict Additional"}
 
 		// First insert - builds cache
-		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err := tbl.Insert(user, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 
 		// Second insert - uses cache
 		user2 := zorm.V{"email": "reuseonconflictadditional2@example.com", "name": "Reuse OnConflict Additional 2"}
-		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, zorm.V{"name": "Updated"}))
+		n, err = tbl.Insert(user2, zorm.OnConflictDoUpdateSet([]string{"email"}, []string{"name"}))
 		So(err, ShouldBeNil)
 		So(n, ShouldBeGreaterThan, 0)
 	})
