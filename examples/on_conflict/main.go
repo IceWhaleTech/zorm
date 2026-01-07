@@ -29,8 +29,5 @@ func main() {
 	_, _ = t.Insert(&u, zorm.Fields("id", "name", "age"))
 
 	u2 := User{ID: 1, Name: "alice2", Age: 21}
-	_, _ = t.Insert(&u2, zorm.Fields("id", "name", "age"), zorm.OnConflictDoUpdateSet([]string{"id"}, zorm.V{
-		"name": "alice2",
-		"age":  zorm.U("age+1"),
-	}))
+	_, _ = t.Insert(&u2, zorm.Fields("id", "name", "age"), zorm.OnConflictDoUpdateSet([]string{"id"}, []string{"name", "age"}))
 }
