@@ -1855,23 +1855,43 @@ func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructFie
 				}
 			}
 		}
-		if fieldVal.IsValid() {
-			v = fieldVal.Interface()
-		}
 
-		// 时间类型特殊处理
-		if col.Type().String() == "time.Time" {
-			if t.Cfg.ToTimestamp {
-				if timePtr, ok := v.(*time.Time); ok {
-					v = timePtr.UTC().Unix()
-				} else if timeVal, ok := v.(time.Time); ok {
-					v = timeVal.UTC().Unix()
+		if fieldVal.IsValid() {
+			// 指针字段：根据是否为 nil 决定写入 NULL 还是实际值
+			if fieldVal.Kind() == reflect.Ptr {
+				if fieldVal.IsNil() {
+					v = nil
+				} else {
+					v = fieldVal.Elem().Interface()
 				}
 			} else {
-				if timePtr, ok := v.(*time.Time); ok {
-					v = timePtr.UTC().Format(_timeLayout)
-				} else if timeVal, ok := v.(time.Time); ok {
-					v = timeVal.UTC().Format(_timeLayout)
+				v = fieldVal.Interface()
+			}
+		}
+
+		// 时间类型特殊处理（同时支持 time.Time 和 *time.Time）
+		if v != nil {
+			if t.Cfg.ToTimestamp {
+				switch tv := v.(type) {
+				case *time.Time:
+					if tv != nil {
+						v = tv.UTC().Unix()
+					} else {
+						v = nil
+					}
+				case time.Time:
+					v = tv.UTC().Unix()
+				}
+			} else {
+				switch tv := v.(type) {
+				case *time.Time:
+					if tv != nil {
+						v = tv.UTC().Format(_timeLayout)
+					} else {
+						v = nil
+					}
+				case time.Time:
+					v = tv.UTC().Format(_timeLayout)
 				}
 			}
 		}
@@ -2859,6 +2879,32 @@ func (dest *scanner) Scan(src interface{}) error {
 		sk = st.Kind()
 		dk = dt.Kind()
 	)
+
+	// 目标是指针类型（例如 *int, *string, *time.Time）
+	// 对指针字段的支持逻辑：
+	//   - 源为 NULL 时上面的分支已经将指针设为 nil
+	//   - 源非 NULL 时，为指针分配一个新的底层值，并复用现有的转换逻辑
+	if dk == reflect.Ptr {
+		// 底层元素类型
+		elemType := dt.(reflect2.PtrType).Elem()
+
+		// 为底层元素分配空间
+		elemPtr := elemType.UnsafeNew()
+
+		// 使用一个临时 scanner 复用现有的转换逻辑
+		inner := scanner{
+			Type: elemType,
+			Val:  elemPtr,
+		}
+
+		if err := inner.Scan(src); err != nil {
+			return err
+		}
+
+		// 直接写入指针值，dest.Val 指向字段本身（类型为 *T）
+		*(*unsafe.Pointer)(dest.Val) = elemPtr
+		return nil
+	}
 
 	// 相同类型，直接赋值
 	if dk == sk {

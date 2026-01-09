@@ -43,4 +43,3 @@ func main() {
 	log.Printf("User after upsert: ID=%d, Name=%s, Age=%d", result.ID, result.Name, result.Age)
 	// Output: User after upsert: ID=1, Name=Bob, Age=25
 }
-

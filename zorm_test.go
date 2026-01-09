@@ -1849,6 +1849,113 @@ func TestIsNullable(t *testing.T) {
 	})
 }
 
+// ========== Pointer Field Support ==========
+
+func TestSelectIntoPointerFields(t *testing.T) {
+	Convey("Select into pointer fields (non-NULL and NULL)", t, func() {
+		db.Exec(`CREATE TABLE IF NOT EXISTS test_pointer_fields_select (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			age INTEGER,
+			created_at DATETIME
+		)`)
+		defer db.Exec("DELETE FROM test_pointer_fields_select")
+
+		// Insert one non-NULL row and one NULL row
+		now := time.Now().UTC().Truncate(time.Second)
+		db.Exec("INSERT INTO test_pointer_fields_select (name, age, created_at) VALUES (?, ?, ?)",
+			"PtrUser", 30, now.Format("2006-01-02 15:04:05"))
+		db.Exec("INSERT INTO test_pointer_fields_select (name, age, created_at) VALUES (NULL, NULL, NULL)")
+
+		type PointerUser struct {
+			ID        int64      `zorm:"id,auto_incr"`
+			Name      *string    `zorm:"name"`
+			Age       *int       `zorm:"age"`
+			CreatedAt *time.Time `zorm:"created_at"`
+		}
+
+		tbl := zorm.Table(db, "test_pointer_fields_select")
+
+		var results []PointerUser
+		n, err := tbl.Select(&results)
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 2)
+
+		// First row: non-NULL
+		So(results[0].Name, ShouldNotBeNil)
+		So(*results[0].Name, ShouldEqual, "PtrUser")
+		So(results[0].Age, ShouldNotBeNil)
+		So(*results[0].Age, ShouldEqual, 30)
+		So(results[0].CreatedAt, ShouldNotBeNil)
+
+		// Second row: NULLs
+		So(results[1].Name, ShouldBeNil)
+		So(results[1].Age, ShouldBeNil)
+		So(results[1].CreatedAt, ShouldBeNil)
+	})
+}
+
+func TestInsertWithPointerFields(t *testing.T) {
+	Convey("Insert with pointer fields (non-NULL and NULL)", t, func() {
+		db.Exec(`CREATE TABLE IF NOT EXISTS test_pointer_fields_insert (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			age INTEGER,
+			created_at DATETIME
+		)`)
+		defer db.Exec("DELETE FROM test_pointer_fields_insert")
+
+		type PointerUser struct {
+			ID        int64      `zorm:"id,auto_incr"`
+			Name      *string    `zorm:"name"`
+			Age       *int       `zorm:"age"`
+			CreatedAt *time.Time `zorm:"created_at"`
+		}
+
+		tbl := zorm.Table(db, "test_pointer_fields_insert")
+
+		// Non-NULL insert
+		name := "PtrUser"
+		age := 30
+		now := time.Now().UTC().Truncate(time.Second)
+		u := PointerUser{
+			Name:      &name,
+			Age:       &age,
+			CreatedAt: &now,
+		}
+
+		n, err := tbl.Insert(&u)
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		var gotName string
+		var gotAge int
+		var gotCreatedAt string
+		err = db.QueryRow("SELECT name, age, created_at FROM test_pointer_fields_insert WHERE id = ?", u.ID).
+			Scan(&gotName, &gotAge, &gotCreatedAt)
+		So(err, ShouldBeNil)
+		So(gotName, ShouldEqual, name)
+		So(gotAge, ShouldEqual, age)
+		So(gotCreatedAt, ShouldNotBeEmpty)
+
+		// NULL insert
+		u2 := PointerUser{}
+		n, err = tbl.Insert(&u2)
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 1)
+
+		var (
+			gotNamePtr *string
+			gotAgePtr  *int
+		)
+		err = db.QueryRow("SELECT name, age FROM test_pointer_fields_insert WHERE id = ?", u2.ID).
+			Scan(&gotNamePtr, &gotAgePtr)
+		So(err, ShouldBeNil)
+		So(gotNamePtr, ShouldBeNil)
+		So(gotAgePtr, ShouldBeNil)
+	})
+}
+
 func TestGetDefaultValue(t *testing.T) {
 	Convey("GetDefaultValue", t, func() {
 		// Tested indirectly through CreateTable
