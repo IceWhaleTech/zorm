@@ -1032,6 +1032,40 @@ func TestConditionBuilders(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(n, ShouldBeGreaterThan, 0)
 		})
+
+		Convey("Expr / Is / IsNot", func() {
+			var results []User
+
+			// Re-seed data for deterministic expectations (other sub-tests may mutate the table)
+			db.Exec("DELETE FROM test_users")
+			seed := []User{
+				{Name: "Cond 1", Email: "cond1@example.com", Age: 20, CreatedAt: time.Now()},
+				{Name: "Cond 2", Email: "cond2@example.com", Age: 30, CreatedAt: time.Now()},
+				{Name: "Cond 3", Email: "cond3@example.com", Age: 40, CreatedAt: time.Now()},
+			}
+			tbl.Insert(&seed)
+
+			// Expr can be used inside And/Or trees
+			n, err := tbl.Select(&results, zorm.Where(zorm.And(
+				zorm.Expr("`age` = ?", 30),
+				zorm.Expr("`name` = ?", "Cond 2"),
+			)))
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 1)
+			So(results[0].Email, ShouldEqual, "cond2@example.com")
+
+			// IsNot
+			results = nil
+			n, err = tbl.Select(&results, zorm.Where(zorm.IsNot("email", "cond1@example.com")))
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 2)
+
+			// Is (nil -> IS NULL)
+			results = nil
+			n, err = tbl.Select(&results, zorm.Where(zorm.Is("created_at", nil)))
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 0)
+		})
 	})
 }
 

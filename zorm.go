@@ -2401,6 +2401,8 @@ func (w *joinItem) BuildSQL(sb *strings.Builder) {
 					}
 					if cond, ok := c.(*ormCond); ok {
 						cond.BuildSQL(sb)
+					} else if expr, ok := c.(*ormExpr); ok {
+						expr.BuildSQL(sb)
 					} else if condEx, ok := c.(*ormCondEx); ok {
 						if len(condEx.Conds) > 1 {
 							sb.WriteString("(")
@@ -2413,11 +2415,11 @@ func (w *joinItem) BuildSQL(sb *strings.Builder) {
 				}
 			} else {
 				// 条件对象格式：使用类似 Where 的处理
-				for i, cond := range w.On {
+				for i, raw := range w.On {
 					if i > 0 {
 						sb.WriteString(" AND ")
 					}
-					if condEx, ok := cond.(*ormCondEx); ok {
+					if condEx, ok := raw.(*ormCondEx); ok {
 						if len(condEx.Conds) > 1 {
 							sb.WriteString("(")
 						}
@@ -2425,8 +2427,10 @@ func (w *joinItem) BuildSQL(sb *strings.Builder) {
 						if len(condEx.Conds) > 1 {
 							sb.WriteString(")")
 						}
-					} else if cond, ok := cond.(*ormCond); ok {
+					} else if cond, ok := raw.(*ormCond); ok {
 						cond.BuildSQL(sb)
+					} else if expr, ok := raw.(*ormExpr); ok {
+						expr.BuildSQL(sb)
 					}
 				}
 			}
@@ -2447,17 +2451,21 @@ func (w *joinItem) BuildArgs(stmtArgs *[]interface{}) {
 			for _, c := range whereItem.Conds {
 				if cond, ok := c.(*ormCond); ok {
 					cond.BuildArgs(stmtArgs)
+				} else if expr, ok := c.(*ormExpr); ok {
+					expr.BuildArgs(stmtArgs)
 				} else if condEx, ok := c.(*ormCondEx); ok {
 					condEx.BuildArgs(stmtArgs)
 				}
 			}
 		} else {
 			// 条件对象格式：处理条件中的参数
-			for _, cond := range w.On {
-				if condEx, ok := cond.(*ormCondEx); ok {
+			for _, raw := range w.On {
+				if condEx, ok := raw.(*ormCondEx); ok {
 					condEx.BuildArgs(stmtArgs)
-				} else if cond, ok := cond.(*ormCond); ok {
+				} else if cond, ok := raw.(*ormCond); ok {
 					cond.BuildArgs(stmtArgs)
+				} else if expr, ok := raw.(*ormExpr); ok {
+					expr.BuildArgs(stmtArgs)
 				}
 			}
 		}
@@ -2497,6 +2505,8 @@ func (w *whereItem) BuildSQL(sb *strings.Builder) {
 		}
 		if cond, ok := c.(*ormCond); ok {
 			cond.BuildSQL(sb)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildSQL(sb)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(w.Conds) > 1 {
 				sb.WriteString("(")
@@ -2513,6 +2523,8 @@ func (w *whereItem) BuildArgs(stmtArgs *[]interface{}) {
 	for _, c := range w.Conds {
 		if cond, ok := c.(*ormCond); ok {
 			*stmtArgs = append(*stmtArgs, cond.Args...)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildArgs(stmtArgs)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			condEx.BuildArgs(stmtArgs)
 		}
@@ -2560,6 +2572,8 @@ func (h *havingItem) BuildSQL(sb *strings.Builder) {
 		}
 		if cond, ok := c.(*ormCond); ok {
 			cond.BuildSQL(sb)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildSQL(sb)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(h.Conds) > 1 {
 				sb.WriteString("(")
@@ -2576,6 +2590,8 @@ func (h *havingItem) BuildArgs(stmtArgs *[]interface{}) {
 	for _, c := range h.Conds {
 		if cond, ok := c.(*ormCond); ok {
 			*stmtArgs = append(*stmtArgs, cond.Args...)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildArgs(stmtArgs)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			condEx.BuildArgs(stmtArgs)
 		}
@@ -2994,6 +3010,18 @@ func (c *ormCond) BuildArgs(stmtArgs *[]interface{}) {
 	*stmtArgs = append(*stmtArgs, c.Args...)
 }
 
+// ormExpr is a custom SQL condition fragment with args.
+// It is designed to be used inside Where/And/Or trees.
+type ormExpr struct {
+	SQL  string
+	Args []interface{}
+}
+
+func (e *ormExpr) BuildSQL(sb *strings.Builder) { sb.WriteString(e.SQL) }
+func (e *ormExpr) BuildArgs(stmtArgs *[]interface{}) {
+	*stmtArgs = append(*stmtArgs, e.Args...)
+}
+
 type ormCondEx struct {
 	Ty    int
 	Conds []interface{}
@@ -3015,6 +3043,8 @@ func (cx *ormCondEx) BuildSQL(sb *strings.Builder) {
 		}
 		if cond, ok := c.(*ormCond); ok {
 			cond.BuildSQL(sb)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildSQL(sb)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			if len(condEx.Conds) > 1 && len(cx.Conds) > 1 {
 				sb.WriteString("(")
@@ -3031,6 +3061,8 @@ func (cx *ormCondEx) BuildArgs(stmtArgs *[]interface{}) {
 	for _, c := range cx.Conds {
 		if cond, ok := c.(*ormCond); ok {
 			*stmtArgs = append(*stmtArgs, cond.Args...)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildArgs(stmtArgs)
 		} else if condEx, ok := c.(*ormCondEx); ok {
 			condEx.BuildArgs(stmtArgs)
 		}
@@ -3054,6 +3086,13 @@ func Or(conds ...interface{}) *ormCondEx {
 // Cond .
 func Cond(c string, args ...interface{}) *ormCond {
 	return &ormCond{Op: c, Args: args}
+}
+
+// Expr allows building a custom SQL condition fragment with args, and is usable inside And/Or.
+// Example:
+//   Where(And(Eq("a", 1), Expr("json_extract(data,'$.x') = ?", 2)))
+func Expr(sql string, args ...interface{}) *ormExpr {
+	return &ormExpr{SQL: sql, Args: args}
 }
 
 // Eq .
@@ -3138,6 +3177,30 @@ RETRY:
 	sb.WriteString(")")
 	return &ormCond{Field: field, Op: sb.String(), Args: args}
 }
+
+// IsNot builds an "IS NOT" condition.
+// If i is nil, it becomes "IS NOT NULL" (no args).
+func IsNot(field string, i interface{}) *ormCond {
+	if i == nil {
+		return &ormCond{Field: field, Op: " is not null"}
+	}
+	return &ormCond{Field: field, Op: " is not ?", Args: []interface{}{i}}
+}
+
+// IsNotNull is a convenience for "IS NOT NULL".
+func IsNotNull(field string) *ormCond { return &ormCond{Field: field, Op: " is not null"} }
+
+// Is builds an "IS" condition.
+// If i is nil, it becomes "IS NULL" (no args).
+func Is(field string, i interface{}) *ormCond {
+	if i == nil {
+		return &ormCond{Field: field, Op: " is null"}
+	}
+	return &ormCond{Field: field, Op: " is ?", Args: []interface{}{i}}
+}
+
+// IsNull is a convenience for "IS NULL".
+func IsNull(field string) *ormCond { return &ormCond{Field: field, Op: " is null"} }
 
 /*
 	data-binding相关
