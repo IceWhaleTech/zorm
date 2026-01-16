@@ -17,7 +17,6 @@
 <tr>
 <th>测试用例</th>
 <th><a href="https://github.com/IceWhaleTech/zorm"><strong>ZORM</strong></a></th>
-<th><a href="https://github.com/orca-zhang/borm"><strong>BORM</strong></a></th>
 <th><a href="https://bun.uptrace.dev/"><strong>BUN</strong></a></th>
 <th><a href="https://github.com/ent/ent"><strong>ENT</strong></a></th>
 <th><a href="https://gorm.io/"><strong>GORM</strong></a></th>
@@ -26,14 +25,14 @@
 </tr>
 </thead>
 <tbody>
-<tr><td>单条插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 3.13x</td><td style="background-color: #FFA500;">🟠 3.46x</td><td style="background-color: #FF6347;">🔴 7.09x</td><td style="background-color: #FF6347;">🔴 60.61x</td><td style="background-color: #FF6347;">🔴 61.12x</td></tr>
-<tr><td>批量插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.30x</td><td style="background-color: #FFA500;">🟠 2.50x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFA500;">🟠 3.57x</td><td style="background-color: #FFA500;">🟠 3.33x</td></tr>
-<tr><td>按ID查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.52x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.90x</td><td style="background-color: #FFA500;">🟠 2x</td><td style="background-color: #FFA500;">🟠 3.12x</td></tr>
-<tr><td>按IDs查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.38x</td><td style="background-color: #FFC107;">🟡 1.39x</td><td style="background-color: #FFC107;">🟡 1.36x</td><td style="background-color: #FFC107;">🟡 1.98x</td></tr>
-<tr><td>更新</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.67x</td><td style="background-color: #FF6347;">🔴 9.86x</td><td style="background-color: #FF6347;">🔴 7.06x</td><td style="background-color: #FF6347;">🔴 82.52x</td><td style="background-color: #FF6347;">🔴 84x</td></tr>
-<tr><td>删除</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.31x</td><td style="background-color: #FFA500;">🟠 2.62x</td><td style="background-color: #FF6347;">🔴 6.40x</td><td style="background-color: #FF6347;">🔴 105.84x</td><td style="background-color: #FF6347;">🔴 101.85x</td></tr>
-<tr><td>计数</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.15x</td><td style="background-color: #FF6347;">🔴 13.40x</td><td style="background-color: #FFA500;">🟠 2.99x</td><td style="background-color: #FFA500;">🟠 4.34x</td><td style="background-color: #FF6347;">🔴 5.95x</td></tr>
-<tr><td>查询全部</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.14x</td><td style="background-color: #FFC107;">🟡 1.21x</td><td style="background-color: #FFC107;">🟡 1.43x</td><td style="background-color: #FFC107;">🟡 1.18x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+<tr><td>单条插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 3.13x</td><td style="background-color: #FFA500;">🟠 3.46x</td><td style="background-color: #FF6347;">🔴 7.09x</td><td style="background-color: #FF6347;">🔴 60.61x</td><td style="background-color: #FF6347;">🔴 61.12x</td></tr>
+<tr><td>批量插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.30x</td><td style="background-color: #FFA500;">🟠 2.50x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFA500;">🟠 3.57x</td><td style="background-color: #FFA500;">🟠 3.33x</td></tr>
+<tr><td>按ID查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.52x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.90x</td><td style="background-color: #FFA500;">🟠 2x</td><td style="background-color: #FFA500;">🟠 3.12x</td></tr>
+<tr><td>按IDs查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.38x</td><td style="background-color: #FFC107;">🟡 1.39x</td><td style="background-color: #FFC107;">🟡 1.36x</td><td style="background-color: #FFC107;">🟡 1.98x</td></tr>
+<tr><td>更新</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.67x</td><td style="background-color: #FF6347;">🔴 9.86x</td><td style="background-color: #FF6347;">🔴 7.06x</td><td style="background-color: #FF6347;">🔴 82.52x</td><td style="background-color: #FF6347;">🔴 84x</td></tr>
+<tr><td>删除</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.31x</td><td style="background-color: #FFA500;">🟠 2.62x</td><td style="background-color: #FF6347;">🔴 6.40x</td><td style="background-color: #FF6347;">🔴 105.84x</td><td style="background-color: #FF6347;">🔴 101.85x</td></tr>
+<tr><td>计数</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.15x</td><td style="background-color: #FF6347;">🔴 13.40x</td><td style="background-color: #FFA500;">🟠 2.99x</td><td style="background-color: #FFA500;">🟠 4.34x</td><td style="background-color: #FF6347;">🔴 5.95x</td></tr>
+<tr><td>查询全部</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.14x</td><td style="background-color: #FFC107;">🟡 1.21x</td><td style="background-color: #FFC107;">🟡 1.43x</td><td style="background-color: #FFC107;">🟡 1.18x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
 </tbody>
 </table>
 
