@@ -10,6 +10,37 @@
 
 [English](README.md) | [中文](README_cn.md)
 
+# 📊 [性能基准测试](https://github.com/benchplus/goorm)
+
+<table>
+<thead>
+<tr>
+<th>测试用例</th>
+<th><a href="https://github.com/IceWhaleTech/zorm"><strong>ZORM</strong></a></th>
+<th><a href="https://github.com/orca-zhang/borm"><strong>BORM</strong></a></th>
+<th><a href="https://bun.uptrace.dev/"><strong>BUN</strong></a></th>
+<th><a href="https://github.com/ent/ent"><strong>ENT</strong></a></th>
+<th><a href="https://gorm.io/"><strong>GORM</strong></a></th>
+<th><a href="https://github.com/jmoiron/sqlx"><strong>SQLX</strong></a></th>
+<th><a href="https://xorm.io/"><strong>XORM</strong></a></th>
+</tr>
+</thead>
+<tbody>
+<tr><td>单条插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 3.13x</td><td style="background-color: #FFA500;">🟠 3.46x</td><td style="background-color: #FF6347;">🔴 7.09x</td><td style="background-color: #FF6347;">🔴 60.61x</td><td style="background-color: #FF6347;">🔴 61.12x</td></tr>
+<tr><td>批量插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.30x</td><td style="background-color: #FFA500;">🟠 2.50x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFA500;">🟠 3.57x</td><td style="background-color: #FFA500;">🟠 3.33x</td></tr>
+<tr><td>按ID查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.52x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.90x</td><td style="background-color: #FFA500;">🟠 2x</td><td style="background-color: #FFA500;">🟠 3.12x</td></tr>
+<tr><td>按IDs查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.38x</td><td style="background-color: #FFC107;">🟡 1.39x</td><td style="background-color: #FFC107;">🟡 1.36x</td><td style="background-color: #FFC107;">🟡 1.98x</td></tr>
+<tr><td>更新</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.67x</td><td style="background-color: #FF6347;">🔴 9.86x</td><td style="background-color: #FF6347;">🔴 7.06x</td><td style="background-color: #FF6347;">🔴 82.52x</td><td style="background-color: #FF6347;">🔴 84x</td></tr>
+<tr><td>删除</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.31x</td><td style="background-color: #FFA500;">🟠 2.62x</td><td style="background-color: #FF6347;">🔴 6.40x</td><td style="background-color: #FF6347;">🔴 105.84x</td><td style="background-color: #FF6347;">🔴 101.85x</td></tr>
+<tr><td>计数</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.15x</td><td style="background-color: #FF6347;">🔴 13.40x</td><td style="background-color: #FFA500;">🟠 2.99x</td><td style="background-color: #FFA500;">🟠 4.34x</td><td style="background-color: #FF6347;">🔴 5.95x</td></tr>
+<tr><td>查询全部</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.14x</td><td style="background-color: #FFC107;">🟡 1.21x</td><td style="background-color: #FFC107;">🟡 1.43x</td><td style="background-color: #FFC107;">🟡 1.18x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+</tbody>
+</table>
+
+> **性能倍数**：数值表示相对于最快 ORM 的性能倍数（数值越小越好）
+>
+> **⭐ Pareto 最优**：表示该 ORM 在该测试用例下 **同时更快且更省内存**（在 **ns/op** 与 **B/op** 这两个维度上为 Pareto 最优，数值越小越好）。⭐ 标记会出现在 **ns/op** 和 **B/op** 两列中。
+
 # 🚀 核心特性
 
 ## ⚡ 高性能
