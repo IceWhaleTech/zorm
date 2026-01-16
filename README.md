@@ -37,9 +37,7 @@
 </tbody>
 </table>
 
-> **Performance Multiplier**: Numbers represent performance multiplier relative to the fastest ORM (lower is better)
->
-> **⭐ Pareto Optimal**: Indicates the ORM is **both faster and more memory-efficient** for this test case (Pareto optimal in both **ns/op** and **B/op** dimensions, where lower values are better). The ⭐ marker appears in both **ns/op** and **B/op** columns.
+> **Performance Ratio**: Numbers represent performance multiplier relative to the fastest ORM (lower is better)
 
 # 🚀 Key Features
 
