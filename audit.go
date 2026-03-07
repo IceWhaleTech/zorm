@@ -15,10 +15,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
+
+const defaultTelemetryRetention = 1024
 
 // SQLAuditEvent represents a SQL execution event for auditing
 type SQLAuditEvent struct {
@@ -102,12 +105,21 @@ type DefaultTelemetryCollector struct {
 	mu      sync.RWMutex
 	data    []*TelemetryData
 	metrics map[string]interface{}
+	maxData int
 }
 
 func NewDefaultTelemetryCollector() *DefaultTelemetryCollector {
+	return NewDefaultTelemetryCollectorWithLimit(defaultTelemetryRetention)
+}
+
+func NewDefaultTelemetryCollectorWithLimit(limit int) *DefaultTelemetryCollector {
+	if limit < 0 {
+		limit = 0
+	}
 	return &DefaultTelemetryCollector{
 		data:    make([]*TelemetryData, 0),
 		metrics: make(map[string]interface{}),
+		maxData: limit,
 	}
 }
 
@@ -115,7 +127,14 @@ func (c *DefaultTelemetryCollector) CollectTelemetry(ctx context.Context, data *
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.data = append(c.data, data)
+	if c.maxData == 0 {
+		c.data = c.data[:0]
+	} else if len(c.data) < c.maxData {
+		c.data = append(c.data, data)
+	} else {
+		copy(c.data, c.data[1:])
+		c.data[len(c.data)-1] = data
+	}
 
 	// Update metrics
 	c.updateMetrics(data)
@@ -133,43 +152,63 @@ func (c *DefaultTelemetryCollector) GetMetrics() map[string]interface{} {
 	return result
 }
 
+func (c *DefaultTelemetryCollector) GetRecentTelemetry() []*TelemetryData {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make([]*TelemetryData, len(c.data))
+	copy(result, c.data)
+	return result
+}
+
 func (c *DefaultTelemetryCollector) updateMetrics(data *TelemetryData) {
 	// Update operation counts
 	opKey := fmt.Sprintf("operation_%s_count", data.Operation)
+	totalCount := 1
 	if count, ok := c.metrics[opKey].(int); ok {
-		c.metrics[opKey] = count + 1
-	} else {
-		c.metrics[opKey] = 1
+		totalCount = count + 1
 	}
+	c.metrics[opKey] = totalCount
 
 	// Update average duration
 	durationKey := fmt.Sprintf("operation_%s_avg_duration_ms", data.Operation)
 	if avg, ok := c.metrics[durationKey].(float64); ok {
-		count := c.metrics[opKey].(int)
-		c.metrics[durationKey] = (avg*float64(count-1) + float64(data.Duration.Milliseconds())) / float64(count)
+		c.metrics[durationKey] = (avg*float64(totalCount-1) + float64(data.Duration.Milliseconds())) / float64(totalCount)
 	} else {
 		c.metrics[durationKey] = float64(data.Duration.Milliseconds())
 	}
 
 	// Update error rate
+	errorCountKey := fmt.Sprintf("operation_%s_error_count", data.Operation)
 	errorKey := fmt.Sprintf("operation_%s_error_rate", data.Operation)
+	errorCount := 0
 	if data.Error != "" {
-		if errorCount, ok := c.metrics[errorKey].(int); ok {
-			c.metrics[errorKey] = errorCount + 1
+		if currentErrorCount, ok := c.metrics[errorCountKey].(int); ok {
+			errorCount = currentErrorCount + 1
 		} else {
-			c.metrics[errorKey] = 1
+			errorCount = 1
 		}
+		c.metrics[errorCountKey] = errorCount
+	} else if currentErrorCount, ok := c.metrics[errorCountKey].(int); ok {
+		errorCount = currentErrorCount
 	}
+	c.metrics[errorKey] = float64(errorCount) / float64(totalCount)
 
 	// Update cache hit rate
+	cacheCountKey := fmt.Sprintf("operation_%s_cache_hit_count", data.Operation)
+	cacheRateKey := fmt.Sprintf("operation_%s_cache_hit_rate", data.Operation)
+	cacheCount := 0
 	if data.CacheHit {
-		cacheKey := fmt.Sprintf("operation_%s_cache_hit_rate", data.Operation)
-		if hitCount, ok := c.metrics[cacheKey].(int); ok {
-			c.metrics[cacheKey] = hitCount + 1
+		if hitCount, ok := c.metrics[cacheCountKey].(int); ok {
+			cacheCount = hitCount + 1
 		} else {
-			c.metrics[cacheKey] = 1
+			cacheCount = 1
 		}
+		c.metrics[cacheCountKey] = cacheCount
+	} else if hitCount, ok := c.metrics[cacheCountKey].(int); ok {
+		cacheCount = hitCount
 	}
+	c.metrics[cacheRateKey] = float64(cacheCount) / float64(totalCount)
 }
 
 // AuditableDB wraps a ZormDBIFace with audit logging
@@ -190,7 +229,7 @@ func NewAuditableDB(db ZormDBIFace, auditLogger AuditLogger, telemetryCollector 
 	}
 
 	return &AuditableDB{
-		db:                 db,
+		db:                 wrapDefaultStmtCacheDB(db),
 		auditLogger:        auditLogger,
 		telemetryCollector: telemetryCollector,
 		enabled:            true,
@@ -239,9 +278,11 @@ func (adb *AuditableDB) QueryRowContext(ctx context.Context, query string, args 
 		Duration:        event.Duration,
 		CacheHit:        false, // TODO: detect cache hits
 		ReuseEnabled:    false, // TODO: detect reuse
+		ConnectionPool:  extractConnectionPoolStats(adb.db),
 		QueryComplexity: calculateQueryComplexity(query),
 	}
 
+	go adb.auditLogger.LogTelemetryData(ctx, telemetryData)
 	go adb.telemetryCollector.CollectTelemetry(ctx, telemetryData)
 
 	return row
@@ -282,10 +323,12 @@ func (adb *AuditableDB) QueryContext(ctx context.Context, query string, args ...
 		Duration:        event.Duration,
 		CacheHit:        false, // TODO: detect cache hits
 		ReuseEnabled:    false, // TODO: detect reuse
+		ConnectionPool:  extractConnectionPoolStats(adb.db),
 		QueryComplexity: calculateQueryComplexity(query),
 		Error:           event.Error,
 	}
 
+	go adb.auditLogger.LogTelemetryData(ctx, telemetryData)
 	go adb.telemetryCollector.CollectTelemetry(ctx, telemetryData)
 
 	return rows, err
@@ -331,10 +374,12 @@ func (adb *AuditableDB) ExecContext(ctx context.Context, query string, args ...i
 		RowsAffected:    event.RowsAffected,
 		CacheHit:        false, // TODO: detect cache hits
 		ReuseEnabled:    false, // TODO: detect reuse
+		ConnectionPool:  extractConnectionPoolStats(adb.db),
 		QueryComplexity: calculateQueryComplexity(query),
 		Error:           event.Error,
 	}
 
+	go adb.auditLogger.LogTelemetryData(ctx, telemetryData)
 	go adb.telemetryCollector.CollectTelemetry(ctx, telemetryData)
 
 	return result, err
@@ -348,7 +393,30 @@ func (adb *AuditableDB) GetTelemetryMetrics() map[string]interface{} {
 // Utility functions
 
 func generateEventID() string {
-	return fmt.Sprintf("evt_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond())
+	return fmt.Sprintf("evt_%d", time.Now().UnixNano())
+}
+
+func extractConnectionPoolStats(db ZormDBIFace) *ConnectionPoolStats {
+	switch typed := db.(type) {
+	case *sql.DB:
+		stats := typed.Stats()
+		return &ConnectionPoolStats{
+			OpenConnections:   stats.OpenConnections,
+			InUseConnections:  stats.InUse,
+			IdleConnections:   stats.Idle,
+			WaitCount:         stats.WaitCount,
+			WaitDuration:      stats.WaitDuration,
+			MaxIdleClosed:     stats.MaxIdleClosed,
+			MaxIdleTimeClosed: stats.MaxIdleTimeClosed,
+			MaxLifetimeClosed: stats.MaxLifetimeClosed,
+		}
+	case *AuditableDB:
+		return extractConnectionPoolStats(typed.db)
+	case *ReadWriteDB:
+		return extractConnectionPoolStats(typed.Master)
+	default:
+		return nil
+	}
 }
 
 func extractTableName(query string) string {
@@ -460,17 +528,37 @@ func (l *FileAuditLogger) LogAuditEvent(ctx context.Context, event *SQLAuditEven
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// TODO: Implement file logging
-	// This is a placeholder - in production, you'd want to use a proper logging library
-	fmt.Printf("[FILE_AUDIT] %s: %s\n", l.filename, event.SQL)
+	l.writeJSONLine("audit", event)
 }
 
 func (l *FileAuditLogger) LogTelemetryData(ctx context.Context, data *TelemetryData) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// TODO: Implement file logging
-	fmt.Printf("[FILE_TELEMETRY] %s: %s\n", l.filename, data.Operation)
+	l.writeJSONLine("telemetry", data)
+}
+
+func (l *FileAuditLogger) writeJSONLine(kind string, payload interface{}) {
+	file, err := os.OpenFile(l.filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Printf("[FILE_%s_ERROR] %v\n", strings.ToUpper(kind), err)
+		return
+	}
+	defer file.Close()
+
+	record := map[string]interface{}{
+		"kind":      kind,
+		"timestamp": time.Now().UTC(),
+		"payload":   payload,
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		fmt.Printf("[FILE_%s_ERROR] %v\n", strings.ToUpper(kind), err)
+		return
+	}
+	if _, err := file.Write(append(encoded, '\n')); err != nil {
+		fmt.Printf("[FILE_%s_ERROR] %v\n", strings.ToUpper(kind), err)
+	}
 }
 
 // JSONAuditLogger logs audit events as JSON

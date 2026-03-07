@@ -348,6 +348,10 @@ func NewDDLManager(db ZormDBIFace, logger DDLLogger) *DDLManager {
 	}
 }
 
+func sqliteQuoteIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 // GetCurrentSchema retrieves current database schema
 func (dm *DDLManager) GetCurrentSchema(ctx context.Context) (*SchemaInfo, error) {
 	schema := &SchemaInfo{
@@ -386,6 +390,9 @@ func (dm *DDLManager) getTables(ctx context.Context) ([]string, error) {
 			}
 			tables = append(tables, name)
 		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 		return tables, nil
 	}
 
@@ -406,6 +413,9 @@ func (dm *DDLManager) getTables(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return tables, nil
@@ -441,7 +451,7 @@ func (dm *DDLManager) getColumns(ctx context.Context, tableName string) (map[str
 	columns := make(map[string]*ColumnDef)
 
 	// Try SQLite first
-	rows, err := dm.db.QueryContext(ctx, "PRAGMA table_info(`"+tableName+"`)")
+	rows, err := dm.db.QueryContext(ctx, "PRAGMA table_info("+sqliteQuoteIdentifier(tableName)+")")
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -465,6 +475,9 @@ func (dm *DDLManager) getColumns(ctx context.Context, tableName string) (map[str
 				DefaultValue:  defaultValue.String,
 				AutoIncrement: isAutoIncr,
 			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 		return columns, nil
 	}
@@ -501,7 +514,8 @@ func (dm *DDLManager) getColumns(ctx context.Context, tableName string) (map[str
 	defer rows.Close()
 
 	for rows.Next() {
-		var name, dataType, isNullable, defaultValue, extra string
+		var name, dataType, isNullable string
+		var defaultValue, extra sql.NullString
 		err := rows.Scan(&name, &dataType, &isNullable, &defaultValue, &extra)
 		if err != nil {
 			return nil, err
@@ -511,9 +525,12 @@ func (dm *DDLManager) getColumns(ctx context.Context, tableName string) (map[str
 			Name:          name,
 			Type:          dataType,
 			Nullable:      isNullable == "YES",
-			DefaultValue:  defaultValue,
-			AutoIncrement: strings.Contains(extra, "auto_increment"),
+			DefaultValue:  defaultValue.String,
+			AutoIncrement: strings.Contains(strings.ToLower(extra.String), "auto_increment"),
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return columns, nil
@@ -524,7 +541,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 	indexes := make(map[string]*IndexInfo)
 
 	// Try SQLite first
-	rows, err := dm.db.QueryContext(ctx, "PRAGMA index_list(`"+tableName+"`)")
+	rows, err := dm.db.QueryContext(ctx, "PRAGMA index_list("+sqliteQuoteIdentifier(tableName)+")")
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -557,16 +574,19 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 				Primary: origin == "pk",
 			}
 		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 		return indexes, nil
 	}
 
-	// Fallback to MySQL/PostgreSQL
+	// Fallback to MySQL
 	query := `
 		SELECT 
 			index_name, 
 			column_name, 
 			non_unique,
-			''
+			CASE WHEN index_name = 'PRIMARY' THEN 1 ELSE 0 END
 		FROM information_schema.statistics 
 		WHERE table_name = ? AND table_schema = DATABASE()
 		ORDER BY index_name, seq_in_index
@@ -579,7 +599,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 				indexname, 
 				attname, 
 				NOT indisunique,
-				''
+				indisprimary
 			FROM pg_indexes 
 			JOIN pg_class ON pg_class.relname = pg_indexes.indexname
 			JOIN pg_index ON pg_index.indexrelid = pg_class.oid
@@ -589,6 +609,54 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 			ORDER BY indexname, attnum
 		`
 		rows, err = dm.db.QueryContext(ctx, pgQuery, tableName)
+		if err == nil {
+			defer rows.Close()
+
+			currentIndex := ""
+			var currentColumns []string
+			var currentUnique bool
+			var currentPrimary bool
+
+			for rows.Next() {
+				var indexName, columnName string
+				var nonUnique int
+				var primary bool
+
+				if err := rows.Scan(&indexName, &columnName, &nonUnique, &primary); err != nil {
+					return nil, err
+				}
+
+				if currentIndex != indexName {
+					if currentIndex != "" {
+						indexes[currentIndex] = &IndexInfo{
+							Name:    currentIndex,
+							Columns: currentColumns,
+							Unique:  currentUnique,
+							Primary: currentPrimary,
+						}
+					}
+
+					currentIndex = indexName
+					currentColumns = []string{columnName}
+					currentUnique = nonUnique == 0
+					currentPrimary = primary
+				} else {
+					currentColumns = append(currentColumns, columnName)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return nil, err
+			}
+			if currentIndex != "" {
+				indexes[currentIndex] = &IndexInfo{
+					Name:    currentIndex,
+					Columns: currentColumns,
+					Unique:  currentUnique,
+					Primary: currentPrimary,
+				}
+			}
+			return indexes, nil
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -598,13 +666,14 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 	currentIndex := ""
 	var currentColumns []string
 	var currentUnique bool
+	var currentPrimary bool
 
 	for rows.Next() {
 		var indexName, columnName string
 		var nonUnique int
-		var extra string
+		var isPrimary int
 
-		err := rows.Scan(&indexName, &columnName, &nonUnique, &extra)
+		err := rows.Scan(&indexName, &columnName, &nonUnique, &isPrimary)
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +685,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 					Name:    currentIndex,
 					Columns: currentColumns,
 					Unique:  currentUnique,
-					Primary: false, // TODO: detect primary key
+					Primary: currentPrimary,
 				}
 			}
 
@@ -624,9 +693,13 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 			currentIndex = indexName
 			currentColumns = []string{columnName}
 			currentUnique = nonUnique == 0
+			currentPrimary = isPrimary == 1
 		} else {
 			currentColumns = append(currentColumns, columnName)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	// Save last index
@@ -635,7 +708,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 			Name:    currentIndex,
 			Columns: currentColumns,
 			Unique:  currentUnique,
-			Primary: false, // TODO: detect primary key
+			Primary: currentPrimary,
 		}
 	}
 
@@ -646,7 +719,7 @@ func (dm *DDLManager) getIndexes(ctx context.Context, tableName string) (map[str
 func (dm *DDLManager) getIndexColumns(ctx context.Context, indexName string) ([]string, error) {
 	var columns []string
 
-	rows, err := dm.db.QueryContext(ctx, "PRAGMA index_info(`"+indexName+"`)")
+	rows, err := dm.db.QueryContext(ctx, "PRAGMA index_info("+sqliteQuoteIdentifier(indexName)+")")
 	if err != nil {
 		return nil, err
 	}
@@ -663,6 +736,9 @@ func (dm *DDLManager) getIndexColumns(ctx context.Context, indexName string) ([]
 		}
 
 		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return columns, nil

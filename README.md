@@ -524,6 +524,11 @@ Option usage example:
       Audit(nil, nil)    // Enable audit logging
    ```
 
+Notes:
+- `Audit(nil, nil)` now wraps the current DB with a working audit/telemetry layer instead of a placeholder no-op.
+- `NewDefaultTelemetryCollectorWithLimit(n)` can be used to keep only the latest `n` telemetry records in memory.
+- `Table(...)`, `TableContext(...)`, `NewReadWriteDB(...)`, and `NewAuditableDB(...)` now enable a bounded prepared-statement cache automatically when the underlying DB supports `PrepareContext`; `NewStmtCacheDB(db, n)` is available for explicit wrapping.
+
 ### Where
 
 | Example                                                             | Description               |
@@ -531,6 +536,8 @@ Option usage example:
 | Where("id=? and name=?", id, name)                                  | Regular formatted version |
 | Where(Eq("id", id), Eq("name", name)...)                            | Default to and connection |
 | Where(And(Eq("x", x), Eq("y", y), Or(Eq("x", x), Eq("y", y)...)...)...) | And & Or                  |
+
+For non-panicking input validation, use `TryWhere(...)`.
 
 ### Predefined Where Conditions
 
@@ -564,6 +571,8 @@ Option usage example:
 | Having(Eq("id", id), Eq("name", name)...)                            | Default to and connection |
 | Having(And(Eq("x", x), Eq("y", y), Or(Eq("x", x), Eq("y", y)...)...)...) | And & Or                  |
 
+For non-panicking input validation, use `TryHaving(...)`.
+
 ### OrderBy
 
 | Example                           | Description |
@@ -576,6 +585,8 @@ Option usage example:
 |-------------|-----------------------------------------------------------------------|
 | Limit(1)    | Page size 1                                                           |
 | Limit(3, 2) | Page size 3, offset position 2 **（Note the difference from MySQL）** |
+
+For non-panicking input validation, use `TryLimit(...)`.
 
 ### OnConflictDoUpdateSet
 

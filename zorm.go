@@ -10,11 +10,13 @@
 package zorm
 
 import (
+	"container/list"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"path"
 	"reflect"
 	"runtime"
@@ -71,18 +73,20 @@ type Config struct {
 	ToTimestamp         bool
 }
 
+const defaultStmtCacheSize = 128
+
 // Table .
 func Table(db ZormDBIFace, name string, ctx ...context.Context) *ZormTable {
 	if len(ctx) > 0 {
 		return &ZormTable{
-			DB:   db,
+			DB:   wrapDefaultStmtCacheDB(db),
 			Name: name,
 			ctx:  ctx[0],
 			Cfg:  Config{Reuse: true}, // 默认开启Reuse（内建形状感知）
 		}
 	}
 	return &ZormTable{
-		DB:   db,
+		DB:   wrapDefaultStmtCacheDB(db),
 		Name: name,
 		ctx:  context.Background(),
 		Cfg:  Config{Reuse: true}, // 默认开启Reuse（内建形状感知）
@@ -92,7 +96,7 @@ func Table(db ZormDBIFace, name string, ctx ...context.Context) *ZormTable {
 // TableContext 创建带Context的Table，参数顺序：context, db, name
 func TableContext(ctx context.Context, db ZormDBIFace, name string) *ZormTable {
 	return &ZormTable{
-		DB:   db,
+		DB:   wrapDefaultStmtCacheDB(db),
 		Name: name,
 		ctx:  ctx,
 		Cfg:  Config{Reuse: true}, // 默认开启Reuse（内建形状感知）
@@ -119,15 +123,28 @@ func (t *ZormTable) Debug() *ZormTable {
 
 // Audit enables SQL auditing for this table
 func (t *ZormTable) Audit(auditLogger interface{}, telemetryCollector interface{}) *ZormTable {
-	// This is a placeholder - the actual implementation would need to import audit package
-	// For now, we'll just return the table unchanged
-	// In a real implementation, you would:
-	// 1. Import the audit package
-	// 2. Cast the interfaces to the correct types
-	// 3. Call NewAuditableDB from the audit package
-	// 4. Replace t.DB with the auditable wrapper
+	var logger AuditLogger
+	if typedLogger, ok := auditLogger.(AuditLogger); ok {
+		logger = typedLogger
+	}
 
-	fmt.Println("[AUDIT] Audit logging enabled for table:", t.Name)
+	var collector TelemetryCollector
+	if typedCollector, ok := telemetryCollector.(TelemetryCollector); ok {
+		collector = typedCollector
+	}
+
+	if auditable, ok := t.DB.(*AuditableDB); ok {
+		if logger != nil {
+			auditable.auditLogger = logger
+		}
+		if collector != nil {
+			auditable.telemetryCollector = collector
+		}
+		auditable.Enable()
+		return t
+	}
+
+	t.DB = NewAuditableDB(t.DB, logger, collector)
 	return t
 }
 
@@ -149,28 +166,285 @@ func (t *ZormTable) SafeReuse() *ZormTable { return t.Reuse() }
 // NoSafeReuse 已合并进 Reuse，保持兼容
 func (t *ZormTable) NoSafeReuse() *ZormTable { return t }
 
+const shapeKeyCacheMaxParts = 8
+
+type shapeKeyCacheKey struct {
+	Base  string
+	Op    string
+	N     uint8
+	Parts [shapeKeyCacheMaxParts]string
+}
+
 // buildShapeKey 基于调用点key和参数形状构建复用key
 func buildShapeKey(baseKey string, op string, args []ZormItem) string {
+	if len(args) <= shapeKeyCacheMaxParts {
+		total := len(baseKey) + len(op) + 1
+		key := shapeKeyCacheKey{Base: baseKey, Op: op, N: uint8(len(args))}
+		for i, a := range args {
+			shaped, ok := a.(interface{ ShapeKeyPart() string })
+			if !ok {
+				goto fallback
+			}
+			part := shaped.ShapeKeyPart()
+			key.Parts[i] = part
+			total += 1 + len(part)
+		}
+		if cached, ok := _shapeKeyStringCache.Load(key); ok {
+			return cached.(string)
+		}
+		buf := getShapeKeyBuffer(total)
+		buf = append(buf, baseKey...)
+		buf = append(buf, '|')
+		buf = append(buf, op...)
+		for i := 0; i < len(args); i++ {
+			buf = append(buf, '|')
+			buf = append(buf, key.Parts[i]...)
+		}
+		shapeKey := string(buf)
+		putShapeKeyBuffer(buf)
+		if actual, loaded := _shapeKeyStringCache.LoadOrStore(key, shapeKey); loaded {
+			return actual.(string)
+		}
+		return shapeKey
+	}
+
+fallback:
+	total := len(baseKey) + len(op) + 1
+	var fastPartsBuf [shapeKeyCacheMaxParts]string
+	fastParts := fastPartsBuf[:0]
+	if len(args) > len(fastPartsBuf) {
+		fastParts = make([]string, 0, len(args))
+	}
+	for _, a := range args {
+		shaped, ok := a.(interface{ ShapeKeyPart() string })
+		if !ok {
+			fastParts = nil
+			break
+		}
+		part := shaped.ShapeKeyPart()
+		fastParts = append(fastParts, part)
+		total += 1 + len(part)
+	}
+	if fastParts != nil {
+		buf := getShapeKeyBuffer(total)
+		buf = append(buf, baseKey...)
+		buf = append(buf, '|')
+		buf = append(buf, op...)
+		for _, part := range fastParts {
+			buf = append(buf, '|')
+			buf = append(buf, part...)
+		}
+		shapeKey := string(buf)
+		putShapeKeyBuffer(buf)
+		return shapeKey
+	}
+
 	b := getSQLBuilder()
 	defer putSQLBuilder(b)
-
 	b.WriteString(baseKey)
-	b.WriteString("|")
+	b.WriteByte('|')
 	b.WriteString(op)
 	for _, a := range args {
-		b.WriteString("|")
+		b.WriteByte('|')
+		if shaped, ok := a.(interface{ ShapeKeyPart() string }); ok {
+			b.WriteString(shaped.ShapeKeyPart())
+			continue
+		}
 		b.WriteString(strconv.Itoa(a.Type()))
-		sb := getSQLBuilder()
-		a.BuildSQL(sb)
-		b.WriteString(sb.String())
-		putSQLBuilder(sb)
+		a.BuildSQL(b)
 	}
 	return b.String()
 }
 
+func buildItemShapePart(itemType int, sql string) string {
+	if sql == "" {
+		return strconv.Itoa(itemType)
+	}
+	return strconv.Itoa(itemType) + sql
+}
+
+type mapUpdateFieldSpec struct {
+	Name   string
+	Inline bool
+}
+
+func collectMapUpdateFieldSpecs(m V, args []ZormItem) []mapUpdateFieldSpec {
+	if len(args) > 0 && args[0].Type() == _fields {
+		fields := args[0].(*fieldsItem).Fields
+		specs := make([]mapUpdateFieldSpec, 0, len(fields))
+		for _, field := range fields {
+			v, ok := m[field]
+			if !ok || v == nil {
+				continue
+			}
+			_, inline := v.(U)
+			specs = append(specs, mapUpdateFieldSpec{Name: field, Inline: inline})
+		}
+		return specs
+	}
+
+	if len(m) == 0 {
+		return nil
+	}
+	fields := make([]string, 0, len(m))
+	for field := range m {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+
+	specs := make([]mapUpdateFieldSpec, 0, len(fields))
+	for _, field := range fields {
+		_, inline := m[field].(U)
+		specs = append(specs, mapUpdateFieldSpec{Name: field, Inline: inline})
+	}
+	return specs
+}
+
+func appendMapUpdateShapeKey(base string, specs []mapUpdateFieldSpec) string {
+	if len(specs) == 0 {
+		return base
+	}
+	total := len(base)
+	for _, spec := range specs {
+		total += 3 + len(spec.Name)
+	}
+	buf := getShapeKeyBuffer(total)
+	buf = append(buf, base...)
+	for _, spec := range specs {
+		buf = append(buf, '|')
+		buf = append(buf, spec.Name...)
+		buf = append(buf, '=')
+		if spec.Inline {
+			buf = append(buf, 'u')
+		} else {
+			buf = append(buf, 'p')
+		}
+	}
+	shapeKey := string(buf)
+	putShapeKeyBuffer(buf)
+	return shapeKey
+}
+
+func getShapeKeyBuffer(size int) []byte {
+	buf := _shapeKeyBufferPool.Get().([]byte)
+	if cap(buf) < size {
+		return make([]byte, 0, size)
+	}
+	return buf[:0]
+}
+
+func putShapeKeyBuffer(buf []byte) {
+	if cap(buf) > 4096 {
+		return
+	}
+	_shapeKeyBufferPool.Put(buf[:0])
+}
+
+func buildFieldsSQL(fields []string) string {
+	var sb strings.Builder
+	for i, field := range fields {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		if field == "*" {
+			sb.WriteString("*")
+		} else {
+			fieldEscape(&sb, field)
+		}
+	}
+	return sb.String()
+}
+
+func writeCondListSQL(sb *strings.Builder, conds []interface{}, prefix string) {
+	if len(conds) <= 0 {
+		return
+	}
+	sb.WriteString(prefix)
+	for i, c := range conds {
+		if i > 0 {
+			sb.WriteString(" and ")
+		}
+		if cond, ok := c.(*ormCond); ok {
+			cond.BuildSQL(sb)
+		} else if expr, ok := c.(*ormExpr); ok {
+			expr.BuildSQL(sb)
+		} else if condEx, ok := c.(*ormCondEx); ok {
+			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(conds) > 1 {
+				sb.WriteString("(")
+			}
+			condEx.BuildSQL(sb)
+			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(conds) > 1 {
+				sb.WriteString(")")
+			}
+		}
+	}
+}
+
+func buildWhereSQL(conds []interface{}) string {
+	var sb strings.Builder
+	writeCondListSQL(&sb, conds, " where ")
+	return sb.String()
+}
+
+func buildHavingSQL(conds []interface{}) string {
+	var sb strings.Builder
+	writeCondListSQL(&sb, conds, " having ")
+	return sb.String()
+}
+
+func buildOrderBySQL(orders []string) string {
+	var sb strings.Builder
+	sb.WriteString(" order by ")
+	for i, order := range orders {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fieldEscape(&sb, order)
+	}
+	return sb.String()
+}
+
+func buildGroupBySQL(fields []string) string {
+	var sb strings.Builder
+	sb.WriteString(" group by ")
+	for i, field := range fields {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fieldEscape(&sb, field)
+	}
+	return sb.String()
+}
+
+func buildLimitSQL(args []interface{}) string {
+	var sb strings.Builder
+	sb.WriteString(" limit ?")
+	if len(args) > 1 {
+		sb.WriteString(" offset ?")
+	}
+	return sb.String()
+}
+
+func buildCondSQL(field string, op string) string {
+	var sb strings.Builder
+	if field != "" {
+		fieldEscape(&sb, field)
+	}
+	sb.WriteString(op)
+	return sb.String()
+}
+
+func buildCondExSQL(ty int, conds []interface{}) string {
+	cx := &ormCondEx{Ty: ty, Conds: conds}
+	var sb strings.Builder
+	cx.BuildSQL(&sb)
+	return sb.String()
+}
+
 // Fields .
 func Fields(fields ...string) *fieldsItem {
-	return &fieldsItem{Fields: fields}
+	sql := buildFieldsSQL(fields)
+	return &fieldsItem{Fields: fields, SQL: sql, Shape: buildItemShapePart(_fields, sql)}
 }
 
 // Join .
@@ -216,14 +490,25 @@ func FullJoin(table string, on ...interface{}) *joinItem {
 
 // Where .
 func Where(conds ...interface{}) *whereItem {
+	w, err := TryWhere(conds...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return w
+}
+
+// TryWhere returns an error instead of panicking on invalid input.
+func TryWhere(conds ...interface{}) (*whereItem, error) {
 	if l := len(conds); l > 0 {
 		if s, ok := conds[0].(string); ok {
+			sql := " where " + s
 			return &whereItem{Conds: []interface{}{
 				&ormCond{
 					Op:   s,
 					Args: conds[1:l],
+					SQL:  s,
 				},
-			}}
+			}, SQL: sql, Shape: buildItemShapePart(_where, sql)}, nil
 		}
 		w := &whereItem{}
 		for _, c := range conds {
@@ -234,26 +519,40 @@ func Where(conds ...interface{}) *whereItem {
 			}
 			w.Conds = append(w.Conds, c)
 		}
-		return w
+		w.SQL = buildWhereSQL(w.Conds)
+		w.Shape = buildItemShapePart(_where, w.SQL)
+		return w, nil
 	}
-	panic("too few conditions")
+	return nil, errors.New("too few conditions")
 }
 
 // GroupBy .
 func GroupBy(fields ...string) *groupByItem {
-	return &groupByItem{Fields: fields}
+	sql := buildGroupBySQL(fields)
+	return &groupByItem{Fields: fields, SQL: sql, Shape: buildItemShapePart(_groupBy, sql)}
 }
 
 // Having .
 func Having(conds ...interface{}) *havingItem {
+	h, err := TryHaving(conds...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return h
+}
+
+// TryHaving returns an error instead of panicking on invalid input.
+func TryHaving(conds ...interface{}) (*havingItem, error) {
 	if l := len(conds); l > 0 {
 		if s, ok := conds[0].(string); ok {
+			sql := " having " + s
 			return &havingItem{Conds: []interface{}{
 				&ormCond{
 					Op:   s,
 					Args: conds[1:l],
+					SQL:  s,
 				},
-			}}
+			}, SQL: sql, Shape: buildItemShapePart(_having, sql)}, nil
 		}
 		h := &havingItem{}
 		for _, c := range conds {
@@ -264,34 +563,48 @@ func Having(conds ...interface{}) *havingItem {
 			}
 			h.Conds = append(h.Conds, c)
 		}
-		return h
+		h.SQL = buildHavingSQL(h.Conds)
+		h.Shape = buildItemShapePart(_having, h.SQL)
+		return h, nil
 	}
-	panic("too few conditions")
+	return nil, errors.New("too few conditions")
 }
 
 // OrderBy .
 func OrderBy(orders ...string) *orderByItem {
-	return &orderByItem{Orders: orders}
+	sql := buildOrderBySQL(orders)
+	return &orderByItem{Orders: orders, SQL: sql, Shape: buildItemShapePart(_orderBy, sql)}
 }
 
 // Limit .
 func Limit(i ...interface{}) *limitItem {
+	l, err := TryLimit(i...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return l
+}
+
+// TryLimit returns an error instead of panicking on invalid input.
+func TryLimit(i ...interface{}) (*limitItem, error) {
 	switch len(i) {
 	case 1, 2:
-		return &limitItem{I: i}
+		sql := buildLimitSQL(i)
+		return &limitItem{I: i, SQL: sql, Shape: buildItemShapePart(_limit, sql)}, nil
 	}
-	panic("too few or too many limit params")
+	return nil, errors.New("too few or too many limit params")
 }
 
 // OnConflictDoUpdateSet 支持 SQLite 的 INSERT ... ON CONFLICT DO UPDATE 语法
 // 使用 excluded. 前缀来引用冲突行的值
 // 这是 SQLite 的官方 UPSERT 语法，功能上等价于 MySQL 的 ON DUPLICATE KEY UPDATE
 // 示例：
-//   INSERT INTO users (id, name, age)
-//   VALUES (1, 'Alice', 18)
-//   ON CONFLICT(id) DO UPDATE SET
-//       name = excluded.name,
-//       age  = excluded.age;
+//
+//	INSERT INTO users (id, name, age)
+//	VALUES (1, 'Alice', 18)
+//	ON CONFLICT(id) DO UPDATE SET
+//	    name = excluded.name,
+//	    age  = excluded.age;
 func OnConflictDoUpdateSet(conflictFields []string, updateFields []string) *onConflictDoUpdateSetItem {
 	res := &onConflictDoUpdateSetItem{}
 	if len(conflictFields) <= 0 || len(updateFields) <= 0 {
@@ -337,11 +650,13 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 
 		item     *DataBindingItem
 		stmtArgs []interface{}
+		shapeKey string
 	)
+	origArgs := args
 
 	// 使用池化的参数切片
 	stmtArgs = getArgsSlice()
-	defer putArgsSlice(stmtArgs)
+	defer func() { putArgsSlice(stmtArgs) }()
 
 	switch rt.Kind() {
 	case reflect.Ptr:
@@ -384,30 +699,26 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 
 	if t.Cfg.Reuse {
 		callSite := getCallSite()
-		shapeKey := buildShapeKey(callSite.Key, "Select", args)
+		shapeKey = buildShapeKey(callSite.Key, "Select", origArgs)
 		if i, ok := _dataBindingCache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
 	}
 
+	queryArgs := origArgs
 	if item != nil {
-		// struct类型
-		if rtElem.Kind() == reflect.Struct {
-			if len(args) > 0 && args[0].Type() == _fields {
-				args = args[1:]
+		switch rtElem.Kind() {
+		case reflect.Struct, reflect.Map:
+			if len(queryArgs) > 0 && queryArgs[0].Type() == _fields {
+				queryArgs = queryArgs[1:]
 			}
-		} else if rtElem.Kind() == reflect.Map {
-			// map类型需要Fields，跳过缓存
-			if len(args) > 0 && args[0].Type() == _fields {
-				args = args[1:]
-			}
-		} else {
-			if len(args) > 0 {
-				args = args[1:]
+		default:
+			if len(queryArgs) > 0 {
+				queryArgs = queryArgs[1:]
 			}
 		}
 
-		for _, arg := range args {
+		for _, arg := range queryArgs {
 			arg.BuildArgs(&stmtArgs)
 		}
 	} else {
@@ -416,217 +727,102 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		sb := getSQLBuilder()
 		sb.WriteString("select ")
 
-		if isArray {
-			item.Elem = rtElem.New()
-		} else {
-			if isPtrPtr {
-				// 如果是指针的指针，创建新对象
-				item.Elem = rtElem.New()
-			} else {
-				item.Elem = res
-			}
-		}
-
-		// struct类型
-		if rtElem.Kind() == reflect.Struct {
+		switch rtElem.Kind() {
+		case reflect.Struct:
 			s := rtElem.(reflect2.StructType)
+			fieldSet := t.getStructFieldSet(s)
+			selected := false
 
-			if len(args) > 0 && args[0].Type() == _fields {
-				fieldsList := args[0].(*fieldsItem).Fields
-				// 如果 Fields() 是空的，跳过它，使用默认行为（选择所有有 zorm 标签的字段）
-				if len(fieldsList) == 0 {
-					// 跳过 Fields() 参数，使用默认行为
-					args = args[1:]
-					// 继续执行，进入 else 分支（不执行下面的代码）
-				} else {
-					m := t.getStructFieldMap(s)
-
+			if len(queryArgs) > 0 && queryArgs[0].Type() == _fields {
+				fieldsList := queryArgs[0].(*fieldsItem).Fields
+				queryArgs = queryArgs[1:]
+				if len(fieldsList) > 0 {
+					selected = true
 					wildcardUsed := false
 					for _, field := range fieldsList {
 						if field == "*" {
-							// 处理通配符：选择所有字段
-							// 使用递归函数处理嵌入结构体，直接展开嵌入字段
 							wildcardUsed = true
-							var collectFieldsForWildcard func(s reflect2.StructType)
-							collectFieldsForWildcard = func(s reflect2.StructType) {
-								for i := 0; i < s.NumField(); i++ {
-									f := s.Field(i)
-									ft := f.Tag().Get("zorm")
-
-									// 忽略zorm tag为"-"的字段
-									if ft == "-" {
-										continue
-									}
-
-									// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
-									if f.Name() == "ZormLastId" {
-										continue
-									}
-
-									// 处理embedded struct：直接递归展开，不使用结构体名称
-									if f.Anonymous() && f.Type().Kind() == reflect.Struct {
-										embeddedStruct := f.Type().(reflect2.StructType)
-										collectFieldsForWildcard(embeddedStruct)
-										continue
-									}
-
-									// 获取数据库字段名
-									dbFieldName := getFieldName(f)
-									if dbFieldName == "" {
-										continue
-									}
-
-									// 构建SQL字段列表
-									if len(item.Cols) > 0 {
-										sb.WriteString(",")
-									}
-									fieldEscape(sb, dbFieldName)
-
-									item.Cols = append(item.Cols, &scanner{
-										Type: f.Type(),
-										Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-									})
-								}
-							}
-							collectFieldsForWildcard(s)
-						} else {
-							f := m[field]
-							if f != nil {
-								item.Cols = append(item.Cols, &scanner{
-									Type: f.Type(),
-									Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-								})
-							}
+							break
 						}
 					}
 
-					// 如果使用了通配符，已经构建了SQL，不需要再调用BuildSQL
-					if !wildcardUsed {
-						(args[0]).BuildSQL(sb)
+					if wildcardUsed {
+						sb.WriteString(fieldSet.DefaultSQL)
+						item.SCols = make([]reflect2.StructField, 0, len(fieldSet.Ordered))
+						for _, meta := range fieldSet.Ordered {
+							item.SCols = append(item.SCols, meta.Field)
+						}
+					} else {
+						queryArgs = append([]ZormItem{Fields(fieldsList...)}, queryArgs...)
+						queryArgs[0].BuildSQL(sb)
+						queryArgs = queryArgs[1:]
+						item.SCols = make([]reflect2.StructField, 0, len(fieldsList))
+						for _, field := range fieldsList {
+							if f := fieldSet.FieldMap[field]; f != nil {
+								item.SCols = append(item.SCols, f)
+							}
+						}
 					}
-					args = args[1:]
 				}
 			}
 
-			// 如果没有指定 Fields() 或 Fields() 是空的，使用默认行为
-			if len(args) == 0 || (len(args) > 0 && args[0].Type() != _fields) {
-				// 无条件查询：选择所有字段（有zorm tag或UseNameWhenTagEmpty为true）
-				// 使用递归函数处理嵌入结构体
-				var collectFieldsForDefault func(s reflect2.StructType)
-				collectFieldsForDefault = func(s reflect2.StructType) {
-					for i := 0; i < s.NumField(); i++ {
-						f := s.Field(i)
-						ft := f.Tag().Get("zorm")
-
-						// 忽略zorm tag为"-"的字段
-						if ft == "-" {
-							continue
-						}
-
-						// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
-						if f.Name() == "ZormLastId" {
-							continue
-						}
-
-						// 处理embedded struct：直接递归展开，不使用结构体名称
-						if f.Anonymous() && f.Type().Kind() == reflect.Struct {
-							embeddedStruct := f.Type().(reflect2.StructType)
-							collectFieldsForDefault(embeddedStruct)
-							continue
-						}
-
-						// 使用getFieldName获取数据库字段名（自动转换驼峰为蛇形）
-						dbFieldName := getFieldName(f)
-						if dbFieldName == "" {
-							// 如果字段名为空，跳过该字段
-							continue
-						}
-
-						// 如果没有zorm tag且UseNameWhenTagEmpty为false，但getFieldName返回了字段名（自动转换），仍然包含该字段
-						// 这样可以支持自动驼峰转蛇形的功能
-
-						if len(item.Cols) > 0 {
-							sb.WriteString(",")
-						}
-						fieldEscape(sb, dbFieldName)
-
-						item.Cols = append(item.Cols, &scanner{
-							Type: f.Type(),
-							Val:  f.UnsafeGet(reflect2.PtrOf(item.Elem)),
-						})
-					}
-				}
-				collectFieldsForDefault(s)
-
-				// 如果没有选择任何字段，返回错误
-				if len(item.Cols) == 0 {
+			if !selected {
+				if len(fieldSet.Ordered) == 0 {
 					putSQLBuilder(sb)
 					return 0, errors.New("no fields to select: struct has no fields with zorm tags or UseNameWhenTagEmpty is false")
 				}
+				sb.WriteString(fieldSet.DefaultSQL)
+				item.SCols = make([]reflect2.StructField, 0, len(fieldSet.Ordered))
+				for _, meta := range fieldSet.Ordered {
+					item.SCols = append(item.SCols, meta.Field)
+				}
 			}
-		} else if rtElem.Kind() == reflect.Map {
+		case reflect.Map:
 			// map类型：如果指定了Fields，使用指定的字段；否则使用 SELECT *
-			if len(args) > 0 && args[0].Type() == _fields {
-				fi := args[0].(*fieldsItem)
-				// 存储Fields信息到item中，供后续使用
-				item.Fields = fi.Fields
-
-				for i, field := range fi.Fields {
+			if len(queryArgs) > 0 && queryArgs[0].Type() == _fields {
+				fi := queryArgs[0].(*fieldsItem)
+				item.Fields = append([]string(nil), fi.Fields...)
+				for i, field := range item.Fields {
 					if i > 0 {
 						sb.WriteString(",")
 					}
 					fieldEscape(sb, field)
-
-					// 为map创建interface{}类型的scanner
-					var temp interface{}
-					item.Cols = append(item.Cols, &scanner{
-						Type: reflect2.TypeOf((*interface{})(nil)).(reflect2.PtrType).Elem(),
-						Val:  unsafe.Pointer(&temp), // 临时指针，稍后会被替换
-					})
 				}
-				args = args[1:]
+				item.Cols = make([]interface{}, len(item.Fields))
+				queryArgs = queryArgs[1:]
 			} else {
-				// 没有指定Fields，使用 SELECT *
 				sb.WriteString("*")
-				// 注意：这种情况下，我们无法预先知道列的数量和类型
-				// 需要在执行查询后动态处理
 			}
-		} else {
+		default:
 			// 必须有fields且为1
-			if len(args) == 0 || args[0].Type() != _fields {
+			if len(queryArgs) == 0 || queryArgs[0].Type() != _fields {
+				putSQLBuilder(sb)
 				return 0, errors.New("argument 3 need ONE Fields(\"name\") with ONE field")
 			}
 
-			fi := args[0].(*fieldsItem)
+			fi := queryArgs[0].(*fieldsItem)
 			if len(fi.Fields) < 1 {
+				putSQLBuilder(sb)
 				return 0, errors.New("too few fields")
 			}
 
-			item.Cols = append(item.Cols, &scanner{
-				Type: rtElem,
-				Val:  reflect2.PtrOf(item.Elem),
-			})
-
 			fieldEscape(sb, fi.Fields[0])
-			args = args[1:]
+			queryArgs = queryArgs[1:]
 		}
 
 		sb.WriteString(" from ")
-
 		fieldEscape(sb, t.Name)
 
 		// 处理 args，自动将 ormCond 和 ormCondEx 包装为 whereItem
-		for _, arg := range args {
-			// 如果 arg 是 ormCondEx，自动包装为 whereItem
+		for _, arg := range queryArgs {
 			if condEx, ok := arg.(*ormCondEx); ok {
-				whereItem := &whereItem{Conds: []interface{}{condEx}}
-				whereItem.BuildSQL(sb)
-				whereItem.BuildArgs(&stmtArgs)
+				where := &whereItem{Conds: []interface{}{condEx}}
+				where.BuildSQL(sb)
+				where.BuildArgs(&stmtArgs)
 			} else if cond, ok := arg.(*ormCond); ok {
-				// 如果 arg 是 ormCond，自动包装为 whereItem
-				whereItem := &whereItem{Conds: []interface{}{cond}}
-				whereItem.BuildSQL(sb)
-				whereItem.BuildArgs(&stmtArgs)
+				where := &whereItem{Conds: []interface{}{cond}}
+				where.BuildSQL(sb)
+				where.BuildArgs(&stmtArgs)
 			} else {
 				arg.BuildSQL(sb)
 				arg.BuildArgs(&stmtArgs)
@@ -634,11 +830,10 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		}
 
 		item.SQL = sb.String()
-		putSQLBuilder(sb) // 释放字符串构建器
+		putSQLBuilder(sb)
 
-		if t.Cfg.Reuse {
-			callSite := getCallSite()
-			shapeKey := buildShapeKey(callSite.Key, "Select", args)
+		shouldCache := t.Cfg.Reuse && shapeKey != "" && !(rtElem.Kind() == reflect.Map && len(item.Fields) == 0)
+		if shouldCache {
 			_dataBindingCache.Store(shapeKey, item)
 		}
 	}
@@ -647,11 +842,27 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		log.Println(item.SQL, stmtArgs)
 	}
 
+	var (
+		selectElem interface{}
+		scanCols   []interface{}
+	)
+	if rtElem.Kind() != reflect.Map {
+		if isArray || isPtrPtr {
+			selectElem = rtElem.New()
+		} else {
+			selectElem = res
+		}
+		binding := bindSelectScanCols(item, selectElem)
+		scanCols = binding.Cols
+		defer putSelectScanBinding(binding)
+	}
+
 	if !isArray {
 		// fire
 		if rtElem.Kind() == reflect.Map {
+			stringAnyMap := isStringAnyMapType(rtElem)
 			// Map类型需要特殊处理
-			// 如果没有指定Fields（使用SELECT *），需要从查询结果获取列名
+			// 如果没有指定Fields（使用SELECT *），第一次查询后缓存列名
 			if len(item.Fields) == 0 {
 				rows, err := t.DB.QueryContext(t.ctx, item.SQL, stmtArgs...)
 				if err != nil {
@@ -663,71 +874,44 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				if err != nil {
 					return 0, err
 				}
-
-				item.Fields = columns
-				values := make([]interface{}, len(columns))
-				for i := range values {
-					values[i] = &values[i]
+				item.Fields = append([]string(nil), columns...)
+				if t.Cfg.Reuse && shapeKey != "" {
+					_dataBindingCache.Store(shapeKey, item)
 				}
 
+				binding := getMapScanBinding(len(item.Fields))
+				defer putMapScanBinding(binding)
+
 				if rows.Next() {
-					err = rows.Scan(values...)
+					err = rows.Scan(binding.Ptrs...)
 					if err != nil {
 						return 0, err
 					}
 
-					// 构建map
-					mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
-					for i, field := range item.Fields {
-						var val interface{}
-						if ptr, ok := values[i].(*interface{}); ok {
-							val = *ptr
+					if stringAnyMap {
+						mapVal := buildStringAnyMap(item.Fields, binding.Values)
+						if dest, ok := res.(*map[string]interface{}); ok {
+							*dest = mapVal
 						} else {
-							// 如果不是 *interface{}，直接使用值
-							val = values[i]
+							reflect.ValueOf(res).Elem().Set(reflect.ValueOf(mapVal))
 						}
-						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(val))
+						return 1, nil
 					}
-
-					// 设置到结果
+					mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
+					fillReflectMap(mapVal, item.Fields, binding.Values)
 					reflect.ValueOf(res).Elem().Set(mapVal)
 					return 1, nil
-				} else {
-					return 0, nil
 				}
-			} else {
-				// 使用指定的Fields
-				values := make([]interface{}, len(item.Cols))
-				for i := range values {
-					values[i] = &values[i]
-				}
-
-				err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(values...)
-				if err != nil {
-					if err == sql.ErrNoRows {
-						return 0, nil
-					}
+				if err := rows.Err(); err != nil {
 					return 0, err
 				}
-
-				// 构建map
-				mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
-				for i, field := range item.Fields {
-					// values[i] 是 *interface{}，需要解引用
-					if ptr, ok := values[i].(*interface{}); ok {
-						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(*ptr))
-					} else {
-						// 如果不是指针，直接使用
-						mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
-					}
-				}
-
-				// 设置到结果
-				reflect.ValueOf(res).Elem().Set(mapVal)
-				return 1, nil
+				return 0, nil
 			}
-		} else {
-			err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(item.Cols...)
+
+			binding := getMapScanBinding(len(item.Fields))
+			defer putMapScanBinding(binding)
+
+			err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(binding.Ptrs...)
 			if err != nil {
 				if err == sql.ErrNoRows {
 					return 0, nil
@@ -735,96 +919,114 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				return 0, err
 			}
 
-			// 如果是指针的指针（如 **User），需要创建对象并设置
-			if isPtrPtr && rtElem.Kind() == reflect.Struct {
-				// item.Elem 已经是新创建的对象，现在需要将其设置到指针的指针中
-				// res 是 **User，需要设置 *User
-				rvRes := reflect.ValueOf(res)
-				if rvRes.Kind() == reflect.Ptr && !rvRes.IsNil() {
-					// 创建 *User 对象（指向 User 的指针）
-					newPtr := reflect.New(rtElem.Type1())
-					// 将 item.Elem 的数据复制到 newPtr 指向的对象
-					// item.Elem 是 User 类型（值），newPtr.Elem() 也是 User 类型（值）
-					elemVal := reflect.ValueOf(item.Elem)
-					if elemVal.Kind() == reflect.Ptr {
-						newPtr.Elem().Set(elemVal.Elem())
-					} else {
-						newPtr.Elem().Set(elemVal)
-					}
-					// 设置到 res（**User）
-					rvRes.Elem().Set(newPtr)
+			if stringAnyMap {
+				mapVal := buildStringAnyMap(item.Fields, binding.Values)
+				if dest, ok := res.(*map[string]interface{}); ok {
+					*dest = mapVal
+				} else {
+					reflect.ValueOf(res).Elem().Set(reflect.ValueOf(mapVal))
 				}
+				return 1, nil
 			}
-
-			return 1, err
+			mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
+			fillReflectMap(mapVal, item.Fields, binding.Values)
+			reflect.ValueOf(res).Elem().Set(mapVal)
+			return 1, nil
 		}
+
+		err := t.DB.QueryRowContext(t.ctx, item.SQL, stmtArgs...).Scan(scanCols...)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return 0, nil
+			}
+			return 0, err
+		}
+
+		if isPtrPtr && rtElem.Kind() == reflect.Struct {
+			rvRes := reflect.ValueOf(res)
+			if rvRes.Kind() == reflect.Ptr && !rvRes.IsNil() {
+				newPtr := reflect.New(rtElem.Type1())
+				elemVal := reflect.ValueOf(selectElem)
+				if elemVal.Kind() == reflect.Ptr {
+					newPtr.Elem().Set(elemVal.Elem())
+				} else {
+					newPtr.Elem().Set(elemVal)
+				}
+				rvRes.Elem().Set(newPtr)
+			}
+		}
+
+		return 1, nil
 	}
 
-	// fire
 	rows, err := t.DB.QueryContext(t.ctx, item.SQL, stmtArgs...)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 
-	// 如果没有指定Fields（使用SELECT *），需要从查询结果获取列名
-	if rtElem.Kind() == reflect.Map && len(item.Fields) == 0 {
-		columns, err := rows.Columns()
-		if err != nil {
-			return 0, err
+	var mapBinding *mapScanBinding
+	stringAnyMap := isStringAnyMapType(rtElem)
+	if rtElem.Kind() == reflect.Map {
+		if len(item.Fields) == 0 {
+			columns, err := rows.Columns()
+			if err != nil {
+				return 0, err
+			}
+			item.Fields = append([]string(nil), columns...)
+			if t.Cfg.Reuse && shapeKey != "" {
+				_dataBindingCache.Store(shapeKey, item)
+			}
 		}
-		item.Fields = columns
-		item.Cols = make([]interface{}, len(columns))
+		mapBinding = getMapScanBinding(len(item.Fields))
+		defer putMapScanBinding(mapBinding)
 	}
 
 	count := 0
 	for rows.Next() {
 		if rtElem.Kind() == reflect.Map {
-			// Map类型需要特殊处理
-			values := make([]interface{}, len(item.Fields))
-			for i := range values {
-				values[i] = &values[i]
-			}
-
-			err = rows.Scan(values...)
+			err = rows.Scan(mapBinding.Ptrs...)
 			if err != nil {
 				break
 			}
 
-			// 构建map
-			mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
-			for i, field := range item.Fields {
-				if ptr, ok := values[i].(*interface{}); ok {
-					mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(*ptr))
+			if stringAnyMap {
+				mapVal := buildStringAnyMap(item.Fields, mapBinding.Values)
+				if isPtrArray {
+					rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), unsafe.Pointer(&mapVal))
+				} else if dest, ok := res.(*[]map[string]interface{}); ok {
+					*dest = append(*dest, mapVal)
 				} else {
-					mapVal.SetMapIndex(reflect.ValueOf(field), reflect.ValueOf(values[i]))
+					reflect.ValueOf(res).Elem().Set(reflect.Append(reflect.ValueOf(res).Elem(), reflect.ValueOf(mapVal)))
+				}
+			} else {
+				mapVal := reflect.MakeMap(rtElem.(reflect2.MapType).Type1())
+				fillReflectMap(mapVal, item.Fields, mapBinding.Values)
+				if isPtrArray {
+					rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), unsafe.Pointer(&mapVal))
+				} else {
+					reflect.ValueOf(res).Elem().Set(reflect.Append(reflect.ValueOf(res).Elem(), mapVal))
 				}
 			}
-
-			// 添加到slice
-			if isPtrArray {
-				rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), unsafe.Pointer(&mapVal))
-			} else {
-				// 使用reflect包来append
-				reflect.ValueOf(res).Elem().Set(reflect.Append(reflect.ValueOf(res).Elem(), mapVal))
-			}
 		} else {
-			err = rows.Scan(item.Cols...)
+			err = rows.Scan(scanCols...)
 			if err != nil {
 				break
 			}
 
 			if isPtrArray {
 				copyElem := rtElem.UnsafeNew()
-				rtElem.UnsafeSet(copyElem, reflect2.PtrOf(item.Elem))
+				rtElem.UnsafeSet(copyElem, reflect2.PtrOf(selectElem))
 				rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), unsafe.Pointer(&copyElem))
 			} else {
-				rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), reflect2.PtrOf(item.Elem))
+				rt.(reflect2.SliceType).UnsafeAppend(reflect2.PtrOf(res), reflect2.PtrOf(selectElem))
 			}
 		}
 		count++
 	}
-	rows.Close()
+	if err == nil {
+		err = rows.Err()
+	}
 	return count, err
 }
 
@@ -885,51 +1087,86 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		rtPtr      reflect2.Type
 		rtElem     = rt
 
-		sb       strings.Builder
 		stmtArgs []interface{}
 		cols     []reflect2.StructField
 
 		item *DataBindingItem
 	)
+	origArgs := args
+	stmtArgs = getArgsSlice()
+	defer func() { putArgsSlice(stmtArgs) }()
 
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
 		callSite := getCallSite()
-		shapeKey := buildShapeKey(callSite.Key, "Insert", args)
+		shapeKey := buildShapeKey(callSite.Key, "Insert", origArgs)
 		if i, ok := _dataBindingCache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
 	}
 
-	if item != nil && rtElem.Kind() == reflect.Struct {
-		// 使用缓存的SQL和字段信息
-		// 构建参数
-		if isArray {
-			slice := rt.(reflect2.SliceType)
-			length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
-			for i := 0; i < length; i++ {
-				ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
-				for _, f := range cols {
-					var val interface{}
-					if isPtrArray {
-						val = f.UnsafeGet(ptr)
-					} else {
-						val = f.UnsafeGet(ptr)
-					}
-					stmtArgs = append(stmtArgs, val)
-				}
-			}
-		} else {
-			for _, f := range cols {
-				val := f.UnsafeGet(reflect2.PtrOf(objs))
-				stmtArgs = append(stmtArgs, val)
+	cacheRt := rt
+	cacheRtElem := cacheRt
+	cacheRtSlice := rtSlice
+	cacheRtPtr := rtPtr
+	cacheIsArray := isArray
+	cacheIsPtrArray := isPtrArray
+	switch cacheRt.Kind() {
+	case reflect.Ptr:
+		cacheRt = cacheRt.(reflect2.PtrType).Elem()
+		cacheRtElem = cacheRt
+		if cacheRt.Kind() == reflect.Slice {
+			cacheRtSlice = cacheRt
+			cacheRtElem = cacheRt.(reflect2.ListType).Elem()
+			cacheIsArray = true
+			if cacheRtElem.Kind() == reflect.Ptr {
+				cacheRtPtr = cacheRtElem
+				cacheRtElem = cacheRtElem.(reflect2.PtrType).Elem()
+				cacheIsPtrArray = true
 			}
 		}
+	case reflect.Struct:
+		cacheRtElem = cacheRt
+	case reflect.Slice:
+		cacheRtSlice = cacheRt
+		cacheRtElem = cacheRt.(reflect2.ListType).Elem()
+		cacheIsArray = true
+		if cacheRtElem.Kind() == reflect.Ptr {
+			cacheRtPtr = cacheRtElem
+			cacheRtElem = cacheRtElem.(reflect2.PtrType).Elem()
+			cacheIsPtrArray = true
+		}
+	}
 
-		// 处理额外的args
-		for _, arg := range args {
-			arg.BuildSQL(&sb)
-			arg.BuildArgs(&stmtArgs)
+	if item != nil && cacheRtElem.Kind() == reflect.Struct {
+		cols = dataBindingStructFields(item)
+		if len(cols) == 0 {
+			item = nil
+		} else {
+			rtElem = cacheRtElem
+			rtSlice = cacheRtSlice
+			rtPtr = cacheRtPtr
+			isArray = cacheIsArray
+			isPtrArray = cacheIsPtrArray
+
+			// 使用缓存的SQL和字段信息
+			argIndex := ensureStructArgIndexes(item, rtElem.(reflect2.StructType), cols)
+			// 构建参数
+			if isArray {
+				slice := rtSlice.(reflect2.SliceType)
+				length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
+				for i := 0; i < length; i++ {
+					ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
+					t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, rtElem, isPtrArray, ptr)
+				}
+			} else {
+				t.inputArgs(&stmtArgs, cols, argIndex, nil, rtElem, false, reflect2.PtrOf(objs))
+			}
+
+			// 处理额外的args
+			for _, arg := range origArgs {
+				arg.BuildArgs(&stmtArgs)
+			}
 		}
 	} else {
 		// 构建SQL和字段信息
@@ -1226,6 +1463,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		}
 		sbTmp.WriteString(")")
 
+		argIndex := ensureStructArgIndexes(item, s, cols)
 		// inputArgs objs
 		if isArray {
 			// 数组
@@ -1234,12 +1472,12 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					sb.WriteString(",")
 				}
 				sb.WriteString(sbTmp.String())
-				t.inputArgs(&stmtArgs, cols, rtPtr, s, isPtrArray, rtSlice.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
+				t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, s, isPtrArray, rtSlice.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
 			}
 			putSQLBuilder(sbTmp) // 释放临时构建器
 		} else {
 			// 普通元素
-			t.inputArgs(&stmtArgs, cols, rtPtr, s, false, reflect2.PtrOf(objs))
+			t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, s, false, reflect2.PtrOf(objs))
 		}
 
 		// on duplicate key update
@@ -1251,14 +1489,16 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		item.SQL = sb.String()
 		putSQLBuilder(sb) // 释放字符串构建器
 		item.Cols = make([]interface{}, len(cols))
+		item.SCols = make([]reflect2.StructField, len(cols))
 		for i, f := range cols {
 			item.Cols[i] = f
+			item.SCols[i] = f
 		}
 
 		// 存储到缓存
 		if t.Cfg.Reuse {
 			callSite := getCallSite()
-			shapeKey := buildShapeKey(callSite.Key, "Insert", args)
+			shapeKey := buildShapeKey(callSite.Key, "Insert", origArgs)
 			_dataBindingCache.Store(shapeKey, item)
 		}
 	}
@@ -1396,18 +1636,27 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 	}
 
 	var (
-		stmtArgs []interface{}
-		item     *DataBindingItem
+		stmtArgs       []interface{}
+		item           *DataBindingItem
+		shapeKey       string
+		mapUpdateSpecs []mapUpdateFieldSpec
 	)
+	origArgs := args
+	if m, ok := obj.(V); ok {
+		mapUpdateSpecs = collectMapUpdateFieldSpecs(m, origArgs)
+	}
 
 	// 使用池化的参数切片
 	stmtArgs = getArgsSlice()
-	defer putArgsSlice(stmtArgs)
+	defer func() { putArgsSlice(stmtArgs) }()
 
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
 		callSite := getCallSite()
-		shapeKey := buildShapeKey(callSite.Key, "Update", args)
+		shapeKey = buildShapeKey(callSite.Key, "Update", origArgs)
+		if len(mapUpdateSpecs) > 0 {
+			shapeKey = appendMapUpdateShapeKey(shapeKey, mapUpdateSpecs)
+		}
 		if i, ok := _dataBindingCache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
@@ -1419,14 +1668,15 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		if m, ok := obj.(V); ok {
 			// Map类型
 			for _, field := range item.Fields {
-				v := m[field]
-				if v != nil {
-					if _, ok := v.(U); ok {
-						// U类型不需要参数
-					} else {
-						stmtArgs = append(stmtArgs, v)
-					}
+				v, ok := m[field]
+				if !ok {
+					stmtArgs = append(stmtArgs, nil)
+					continue
 				}
+				if _, ok := v.(U); ok {
+					continue
+				}
+				stmtArgs = append(stmtArgs, v)
 			}
 		} else {
 			// Struct类型
@@ -1445,11 +1695,16 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 			}
 			if rt.Kind() == reflect.Struct {
 				s := rt.(reflect2.StructType)
-				cols := make([]reflect2.StructField, len(item.Cols))
-				for i, f := range item.Cols {
-					cols[i] = f.(reflect2.StructField)
+				cols := item.SCols
+				if len(cols) == 0 && len(item.Cols) > 0 {
+					cols = make([]reflect2.StructField, len(item.Cols))
+					for i, f := range item.Cols {
+						cols[i] = f.(reflect2.StructField)
+					}
+					item.SCols = cols
 				}
-				t.inputArgs(&stmtArgs, cols, nil, s, false, reflect2.PtrOf(objPtr))
+				argIndex := ensureStructArgIndexes(item, s, cols)
+				t.inputArgs(&stmtArgs, cols, argIndex, nil, s, false, reflect2.PtrOf(objPtr))
 			} else {
 				return 0, errors.New("non-structure type not supported yet")
 			}
@@ -1471,43 +1726,23 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		// 处理SET部分
 		if m, ok := obj.(V); ok {
 			// Map类型处理
-			if args[0].Type() == _fields {
-				argCnt := 0
-				for _, field := range args[0].(*fieldsItem).Fields {
-					v := m[field]
-					if v != nil {
-						if argCnt > 0 {
-							sb.WriteString(",")
-						}
-						fieldEscape(sb, field)
-						if s, ok := v.(U); ok {
-							sb.WriteString("=")
-							sb.WriteString(string(s))
-						} else {
-							sb.WriteString("=?")
-							stmtArgs = append(stmtArgs, v)
-						}
-						argCnt++
-					}
+			for i, spec := range mapUpdateSpecs {
+				if i > 0 {
+					sb.WriteString(",")
 				}
-				item.Fields = args[0].(*fieldsItem).Fields
+				fieldEscape(sb, spec.Name)
+				v := m[spec.Name]
+				if inline, ok := v.(U); ok {
+					sb.WriteString("=")
+					sb.WriteString(string(inline))
+				} else {
+					sb.WriteString("=?")
+					stmtArgs = append(stmtArgs, v)
+				}
+				item.Fields = append(item.Fields, spec.Name)
+			}
+			if len(args) > 0 && args[0].Type() == _fields {
 				args = args[1:]
-			} else {
-				argCnt := 0
-				for k, v := range m {
-					if argCnt > 0 {
-						sb.WriteString(",")
-					}
-					fieldEscape(sb, k)
-					if s, ok := v.(U); ok {
-						sb.WriteString("=")
-						sb.WriteString(string(s))
-					} else {
-						sb.WriteString("=?")
-						stmtArgs = append(stmtArgs, v)
-					}
-					argCnt++
-				}
 			}
 		} else {
 			// Struct类型处理
@@ -1541,17 +1776,12 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						}
 						fieldEscape(sb, name)
 						sb.WriteString("=?")
-						val := f.Get(s.PackEFace(reflect2.PtrOf(objPtr)))
-						if f.Type().String() == "time.Time" {
-							if t.Cfg.ToTimestamp {
-								val = val.(*time.Time).UTC().Unix()
-							} else {
-								val = val.(*time.Time).UTC().Format(_timeLayout)
-							}
-						}
-						stmtArgs = append(stmtArgs, val)
+						item.Cols = append(item.Cols, f)
+						item.SCols = append(item.SCols, f)
 					}
 					item.Fields = fields
+					argIndex := ensureStructArgIndexes(item, s, item.SCols)
+					t.inputArgs(&stmtArgs, item.SCols, argIndex, nil, s, false, reflect2.PtrOf(objPtr))
 					args = args[1:]
 				} else {
 					// 如果没有 Fields，更新所有字段（除了被忽略的）
@@ -1563,6 +1793,9 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 							continue
 						}
 						if ft == "-" {
+							continue
+						}
+						if isAutoIncrementField(f) {
 							continue
 						}
 						// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
@@ -1587,6 +1820,8 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 							}
 						}
 						stmtArgs = append(stmtArgs, val)
+						item.Cols = append(item.Cols, f)
+						item.SCols = append(item.SCols, f)
 						argCnt++
 					}
 					item.Fields = make([]string, argCnt)
@@ -1598,6 +1833,9 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 							continue
 						}
 						if ft == "-" {
+							continue
+						}
+						if isAutoIncrementField(f) {
 							continue
 						}
 						// 忽略 ZormLastId 字段
@@ -1648,9 +1886,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		putSQLBuilder(sb) // 释放字符串构建器
 
 		// 存储到缓存
-		if t.Cfg.Reuse {
-			callSite := getCallSite()
-			shapeKey := buildShapeKey(callSite.Key, "Update", args)
+		if t.Cfg.Reuse && shapeKey != "" {
 			_dataBindingCache.Store(shapeKey, item)
 		}
 	}
@@ -1688,7 +1924,7 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 
 	// 使用池化的参数切片
 	stmtArgs = getArgsSlice()
-	defer putArgsSlice(stmtArgs)
+	defer func() { putArgsSlice(stmtArgs) }()
 
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
@@ -1794,7 +2030,7 @@ func (t *ZormTable) Exec(query string, args ...interface{}) (int, error) {
 	return int(rowsAffected), nil
 }
 
-func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
+func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructField, argIndex [][]int, rtPtr, s reflect2.Type, ptr bool, x unsafe.Pointer) {
 	// 使用 reflect 包获取结构体值，以便正确处理嵌入结构体
 	var rv reflect.Value
 	if ptr {
@@ -1835,21 +2071,26 @@ func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructFie
 		}
 	}
 
-	for _, col := range cols {
+	for i, col := range cols {
 		var v interface{}
 
-		// 使用 reflect 包获取字段值（支持嵌入结构体）
-		fieldVal := rv.FieldByName(col.Name())
-		if !fieldVal.IsValid() {
-			// 如果直接字段名找不到，尝试在嵌入结构体中查找
-			for i := 0; i < rv.NumField(); i++ {
-				field := rv.Type().Field(i)
-				if field.Anonymous {
-					embeddedVal := rv.Field(i)
-					if embeddedVal.Kind() == reflect.Struct {
-						fieldVal = embeddedVal.FieldByName(col.Name())
-						if fieldVal.IsValid() {
-							break
+		var fieldVal reflect.Value
+		if len(argIndex) == len(cols) && len(argIndex[i]) > 0 {
+			fieldVal = rv.FieldByIndex(argIndex[i])
+		} else {
+			// 使用 reflect 包获取字段值（支持嵌入结构体）
+			fieldVal = rv.FieldByName(col.Name())
+			if !fieldVal.IsValid() {
+				// 如果直接字段名找不到，尝试在嵌入结构体中查找
+				for i := 0; i < rv.NumField(); i++ {
+					field := rv.Type().Field(i)
+					if field.Anonymous {
+						embeddedVal := rv.Field(i)
+						if embeddedVal.Kind() == reflect.Struct {
+							fieldVal = embeddedVal.FieldByName(col.Name())
+							if fieldVal.IsValid() {
+								break
+							}
 						}
 					}
 				}
@@ -1914,6 +2155,144 @@ type ZormTxIFace interface {
 	Rollback() error
 }
 
+type stmtPreparer interface {
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+}
+
+type stmtCacheEntry struct {
+	query string
+	stmt  *sql.Stmt
+	elem  *list.Element
+}
+
+// StmtCacheDB wraps a database handle with a bounded prepared-statement cache.
+type StmtCacheDB struct {
+	db       ZormDBIFace
+	preparer stmtPreparer
+	capacity int
+
+	mu      sync.Mutex
+	entries map[string]*stmtCacheEntry
+	lru     *list.List
+}
+
+func NewStmtCacheDB(db ZormDBIFace, capacity int) *StmtCacheDB {
+	preparer, ok := db.(stmtPreparer)
+	if !ok || capacity <= 0 {
+		return nil
+	}
+	return &StmtCacheDB{
+		db:       db,
+		preparer: preparer,
+		capacity: capacity,
+		entries:  make(map[string]*stmtCacheEntry, capacity),
+		lru:      list.New(),
+	}
+}
+
+func wrapDefaultStmtCacheDB(db ZormDBIFace) ZormDBIFace {
+	if db == nil {
+		return nil
+	}
+	if _, ok := db.(*StmtCacheDB); ok {
+		return db
+	}
+	if _, ok := db.(*sql.Tx); ok {
+		return db
+	}
+	if _, ok := db.(stmtPreparer); !ok {
+		return db
+	}
+	if key, ok := stmtCacheWrapperKey(db); ok {
+		if cached, ok := _stmtCacheWrapperCache.Load(key); ok {
+			return cached.(ZormDBIFace)
+		}
+		wrapped := NewStmtCacheDB(db, defaultStmtCacheSize)
+		if wrapped == nil {
+			return db
+		}
+		actual, _ := _stmtCacheWrapperCache.LoadOrStore(key, wrapped)
+		return actual.(ZormDBIFace)
+	}
+	if wrapped := NewStmtCacheDB(db, defaultStmtCacheSize); wrapped != nil {
+		return wrapped
+	}
+	return db
+}
+
+func stmtCacheWrapperKey(db ZormDBIFace) (interface{}, bool) {
+	t := reflect.TypeOf(db)
+	if t == nil || !t.Comparable() {
+		return nil, false
+	}
+	return db, true
+}
+
+func (db *StmtCacheDB) getStmt(ctx context.Context, query string) (*sql.Stmt, error) {
+	db.mu.Lock()
+	if entry, ok := db.entries[query]; ok {
+		db.lru.MoveToFront(entry.elem)
+		stmt := entry.stmt
+		db.mu.Unlock()
+		return stmt, nil
+	}
+
+	stmt, err := db.preparer.PrepareContext(ctx, query)
+	if err != nil {
+		db.mu.Unlock()
+		return nil, err
+	}
+
+	entry := &stmtCacheEntry{query: query, stmt: stmt}
+	entry.elem = db.lru.PushFront(entry)
+	db.entries[query] = entry
+
+	var evicted *sql.Stmt
+	if len(db.entries) > db.capacity {
+		back := db.lru.Back()
+		if back != nil {
+			old := back.Value.(*stmtCacheEntry)
+			delete(db.entries, old.query)
+			db.lru.Remove(back)
+			evicted = old.stmt
+		}
+	}
+	db.mu.Unlock()
+
+	if evicted != nil {
+		_ = evicted.Close()
+	}
+	return stmt, nil
+}
+
+func (db *StmtCacheDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	stmt, err := db.getStmt(ctx, query)
+	if err != nil {
+		return db.db.QueryRowContext(ctx, query, args...)
+	}
+	return stmt.QueryRowContext(ctx, args...)
+}
+
+func (db *StmtCacheDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	stmt, err := db.getStmt(ctx, query)
+	if err != nil {
+		return db.db.QueryContext(ctx, query, args...)
+	}
+	return stmt.QueryContext(ctx, args...)
+}
+
+func (db *StmtCacheDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	stmt, err := db.getStmt(ctx, query)
+	if err != nil {
+		return db.db.ExecContext(ctx, query, args...)
+	}
+	return stmt.ExecContext(ctx, args...)
+}
+
+func (db *StmtCacheDB) Unwrap() ZormDBIFace {
+	return db.db
+}
+
 // ZormTable .
 type ZormTable struct {
 	DB   ZormDBIFace
@@ -1921,8 +2300,20 @@ type ZormTable struct {
 	Cfg  Config
 	ctx  context.Context
 
-	// 字段映射缓存，避免重复计算
-	fieldMapCache sync.Map
+	// 结构体字段缓存，避免重复反射解析
+	structFieldCache sync.Map
+}
+
+type structFieldMeta struct {
+	DBName string
+	Field  reflect2.StructField
+}
+
+type structFieldSet struct {
+	Ordered       []structFieldMeta
+	DefaultSQL    string
+	FieldMap      map[string]reflect2.StructField
+	AutoIncrement reflect2.StructField
 }
 
 // camelToSnake converts camelCase to snake_case
@@ -1985,72 +2376,95 @@ func fieldEscape(sb *strings.Builder, field string) {
 		return
 	}
 	if !strings.ContainsAny(field, ",( `.") {
-		// 优化：一次性写入，减少函数调用
-		sb.WriteString("`" + field + "`")
+		sb.WriteByte('`')
+		sb.WriteString(field)
+		sb.WriteByte('`')
 	} else {
 		// TODO: 处理alias场景
 		sb.WriteString(field)
 	}
 }
 
-func (t *ZormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2.StructField {
-	// 使用结构体类型作为缓存key
-	typeKey := s.String()
-
-	// 尝试从缓存中获取
-	if cached, ok := t.fieldMapCache.Load(typeKey); ok {
-		return cached.(map[string]reflect2.StructField)
+func setReflectMapValue(mapVal reflect.Value, field string, raw interface{}) {
+	key := reflect.ValueOf(field)
+	if mapKeyType := mapVal.Type().Key(); key.Type() != mapKeyType {
+		key = key.Convert(mapKeyType)
 	}
 
-	// 缓存未命中，构建字段映射
-	m := make(map[string]reflect2.StructField)
-	t.collectStructFields(s, m, "")
+	valueType := mapVal.Type().Elem()
+	if raw == nil {
+		mapVal.SetMapIndex(key, reflect.Zero(valueType))
+		return
+	}
 
-	// 存储到缓存中
-	t.fieldMapCache.Store(typeKey, m)
-	return m
+	value := reflect.ValueOf(raw)
+	if value.Type().AssignableTo(valueType) {
+		mapVal.SetMapIndex(key, value)
+		return
+	}
+	if value.Type().ConvertibleTo(valueType) {
+		mapVal.SetMapIndex(key, value.Convert(valueType))
+		return
+	}
+	if valueType.Kind() == reflect.Interface {
+		mapVal.SetMapIndex(key, value)
+		return
+	}
+	mapVal.SetMapIndex(key, reflect.Zero(valueType))
 }
 
-// collectStructFields 递归收集结构体字段，支持embedded struct
-// 只支持 zorm:"auto_incr" 和 zorm:"-" 标签
-// 自动将驼峰命名转换为蛇形命名
-func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]reflect2.StructField, prefix string) {
+func (t *ZormTable) getStructFieldSet(s reflect2.StructType) *structFieldSet {
+	typeKey := s.String()
+	if cached, ok := t.structFieldCache.Load(typeKey); ok {
+		return cached.(*structFieldSet)
+	}
+
+	set := &structFieldSet{FieldMap: make(map[string]reflect2.StructField)}
+	t.collectStructFieldSet(s, set)
+	set.DefaultSQL = buildFieldsSQL(setFieldNames(set.Ordered))
+	t.structFieldCache.Store(typeKey, set)
+	return set
+}
+
+func (t *ZormTable) getStructFieldMap(s reflect2.StructType) map[string]reflect2.StructField {
+	return t.getStructFieldSet(s).FieldMap
+}
+
+func (t *ZormTable) collectStructFieldSet(s reflect2.StructType, set *structFieldSet) {
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
 		ft := f.Tag().Get("zorm")
 
-		// 忽略zorm tag为"-"的字段
 		if ft == "-" {
 			continue
 		}
-
-		// 忽略 ZormLastId 字段（向后兼容字段，不是数据库列）
 		if f.Name() == "ZormLastId" {
 			continue
 		}
-
-		// 处理embedded struct
 		if f.Anonymous() && f.Type().Kind() == reflect.Struct {
-			embeddedStruct := f.Type().(reflect2.StructType)
-			t.collectStructFields(embeddedStruct, m, prefix)
+			t.collectStructFieldSet(f.Type().(reflect2.StructType), set)
+			continue
+		}
+		if set.AutoIncrement == nil && isAutoIncrementField(f) {
+			set.AutoIncrement = f
+		}
+
+		dbFieldName := getFieldName(f)
+		if dbFieldName == "" {
 			continue
 		}
 
-		// 获取数据库字段名（自动转换驼峰为蛇形）
-		dbFieldName := getFieldName(f)
-		if dbFieldName == "" {
-			continue // 跳过被忽略的字段
-		}
-
-		// 构建完整的字段名（包含前缀）
-		fullFieldName := dbFieldName
-		if prefix != "" {
-			fullFieldName = prefix + "." + dbFieldName
-		}
-
-		// 使用数据库字段名作为映射键
-		m[fullFieldName] = f
+		set.Ordered = append(set.Ordered, structFieldMeta{DBName: dbFieldName, Field: f})
+		set.FieldMap[dbFieldName] = f
 	}
+}
+
+func setFieldNames(fields []structFieldMeta) []string {
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		names = append(names, field.DBName)
+	}
+	return names
 }
 
 // isAutoIncrementField 检查字段是否为自增主键
@@ -2059,44 +2473,30 @@ func (t *ZormTable) collectStructFields(s reflect2.StructType, m map[string]refl
 // - zorm:"auto_incr" - 使用转换后的字段名且为自增
 func isAutoIncrementField(f reflect2.StructField) bool {
 	ft := f.Tag().Get("zorm")
-
-	// If tag is empty or "-", not auto increment
 	if ft == "" || ft == "-" {
 		return false
 	}
 
-	// Parse tag: "field_name,auto_incr" or "field_name" or "auto_incr"
-	tags := strings.Split(ft, ",")
-
-	// Check if any tag contains "auto_incr"
-	for _, tag := range tags {
-		if strings.TrimSpace(tag) == "auto_incr" {
+	for {
+		part := ft
+		if idx := strings.IndexByte(ft, ','); idx >= 0 {
+			part = ft[:idx]
+			ft = ft[idx+1:]
+		} else {
+			ft = ""
+		}
+		if strings.TrimSpace(part) == "auto_incr" {
 			return true
 		}
+		if ft == "" {
+			return false
+		}
 	}
-
-	return false
 }
 
 // getAutoIncrementField 获取自增主键字段（支持嵌入结构体）
 func (t *ZormTable) getAutoIncrementField(s reflect2.StructType) reflect2.StructField {
-	for i := 0; i < s.NumField(); i++ {
-		f := s.Field(i)
-
-		// 处理嵌入结构体
-		if f.Anonymous() && f.Type().Kind() == reflect.Struct {
-			embeddedStruct := f.Type().(reflect2.StructType)
-			if autoField := t.getAutoIncrementField(embeddedStruct); autoField != nil {
-				return autoField
-			}
-			continue
-		}
-
-		if isAutoIncrementField(f) {
-			return f
-		}
-	}
-	return nil
+	return t.getStructFieldSet(s).AutoIncrement
 }
 
 // collectFieldsForInsert 收集字段用于INSERT操作，支持embedded struct
@@ -2323,13 +2723,23 @@ type ZormItem interface {
 
 type fieldsItem struct {
 	Fields []string
+	SQL    string
+	Shape  string
 }
 
 func (w *fieldsItem) Type() int {
 	return _fields
 }
 
+func (w *fieldsItem) ShapeKeyPart() string {
+	return w.Shape
+}
+
 func (w *fieldsItem) BuildSQL(sb *strings.Builder) {
+	if w.SQL != "" {
+		sb.WriteString(w.SQL)
+		return
+	}
 	for i, field := range w.Fields {
 		if i > 0 {
 			sb.WriteString(",")
@@ -2351,6 +2761,10 @@ type onConflictDoUpdateSetItem struct {
 
 func (w *onConflictDoUpdateSetItem) Type() int {
 	return _onConflictDoUpdateSet
+}
+
+func (w *onConflictDoUpdateSetItem) ShapeKeyPart() string {
+	return buildItemShapePart(_onConflictDoUpdateSet, w.Conds)
 }
 
 func (w *onConflictDoUpdateSetItem) BuildSQL(sb *strings.Builder) {
@@ -2480,6 +2894,10 @@ func (w *indexedByItem) Type() int {
 	return _indexedBy
 }
 
+func (w *indexedByItem) ShapeKeyPart() string {
+	return buildItemShapePart(_indexedBy, " indexed by "+w.idx)
+}
+
 func (w *indexedByItem) BuildSQL(sb *strings.Builder) {
 	sb.WriteString(" indexed by " + w.idx)
 }
@@ -2488,35 +2906,24 @@ func (w *indexedByItem) BuildArgs(stmtArgs *[]interface{}) {}
 
 type whereItem struct {
 	Conds []interface{}
+	SQL   string
+	Shape string
 }
 
 func (w *whereItem) Type() int {
 	return _where
 }
 
+func (w *whereItem) ShapeKeyPart() string {
+	return w.Shape
+}
+
 func (w *whereItem) BuildSQL(sb *strings.Builder) {
-	if len(w.Conds) <= 0 {
+	if w.SQL != "" {
+		sb.WriteString(w.SQL)
 		return
 	}
-	sb.WriteString(" where ")
-	for i, c := range w.Conds {
-		if i > 0 {
-			sb.WriteString(" and ")
-		}
-		if cond, ok := c.(*ormCond); ok {
-			cond.BuildSQL(sb)
-		} else if expr, ok := c.(*ormExpr); ok {
-			expr.BuildSQL(sb)
-		} else if condEx, ok := c.(*ormCondEx); ok {
-			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(w.Conds) > 1 {
-				sb.WriteString("(")
-			}
-			condEx.BuildSQL(sb)
-			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(w.Conds) > 1 {
-				sb.WriteString(")")
-			}
-		}
-	}
+	writeCondListSQL(sb, w.Conds, " where ")
 }
 
 func (w *whereItem) BuildArgs(stmtArgs *[]interface{}) {
@@ -2533,21 +2940,24 @@ func (w *whereItem) BuildArgs(stmtArgs *[]interface{}) {
 
 type groupByItem struct {
 	Fields []string
+	SQL    string
+	Shape  string
 }
 
 func (w *groupByItem) Type() int {
 	return _groupBy
 }
 
-func (w *groupByItem) BuildSQL(sb *strings.Builder) {
-	sb.WriteString(" group by ")
+func (w *groupByItem) ShapeKeyPart() string {
+	return w.Shape
+}
 
-	for i, field := range w.Fields {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		fieldEscape(sb, field)
+func (w *groupByItem) BuildSQL(sb *strings.Builder) {
+	if w.SQL != "" {
+		sb.WriteString(w.SQL)
+		return
 	}
+	sb.WriteString(buildGroupBySQL(w.Fields))
 }
 
 func (w *groupByItem) BuildArgs(stmtArgs *[]interface{}) {
@@ -2555,35 +2965,24 @@ func (w *groupByItem) BuildArgs(stmtArgs *[]interface{}) {
 
 type havingItem struct {
 	Conds []interface{}
+	SQL   string
+	Shape string
 }
 
 func (h *havingItem) Type() int {
 	return _having
 }
 
+func (h *havingItem) ShapeKeyPart() string {
+	return h.Shape
+}
+
 func (h *havingItem) BuildSQL(sb *strings.Builder) {
-	if len(h.Conds) <= 0 {
+	if h.SQL != "" {
+		sb.WriteString(h.SQL)
 		return
 	}
-	sb.WriteString(" having ")
-	for i, c := range h.Conds {
-		if i > 0 {
-			sb.WriteString(" and ")
-		}
-		if cond, ok := c.(*ormCond); ok {
-			cond.BuildSQL(sb)
-		} else if expr, ok := c.(*ormExpr); ok {
-			expr.BuildSQL(sb)
-		} else if condEx, ok := c.(*ormCondEx); ok {
-			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(h.Conds) > 1 {
-				sb.WriteString("(")
-			}
-			condEx.BuildSQL(sb)
-			if condEx.Ty > _andCondEx && len(condEx.Conds) > 1 && len(h.Conds) > 1 {
-				sb.WriteString(")")
-			}
-		}
-	}
+	writeCondListSQL(sb, h.Conds, " having ")
 }
 
 func (h *havingItem) BuildArgs(stmtArgs *[]interface{}) {
@@ -2600,40 +2999,49 @@ func (h *havingItem) BuildArgs(stmtArgs *[]interface{}) {
 
 type orderByItem struct {
 	Orders []string
+	SQL    string
+	Shape  string
 }
 
 func (o *orderByItem) Type() int {
 	return _orderBy
 }
 
-func (o *orderByItem) BuildSQL(sb *strings.Builder) {
-	sb.WriteString(" order by ")
+func (o *orderByItem) ShapeKeyPart() string {
+	return o.Shape
+}
 
-	for i, order := range o.Orders {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		// TODO: 带升降序关键词的字段转义
-		fieldEscape(sb, order)
+func (o *orderByItem) BuildSQL(sb *strings.Builder) {
+	if o.SQL != "" {
+		sb.WriteString(o.SQL)
+		return
 	}
+	sb.WriteString(buildOrderBySQL(o.Orders))
 }
 
 func (o *orderByItem) BuildArgs(stmtArgs *[]interface{}) {
 }
 
 type limitItem struct {
-	I []interface{}
+	I     []interface{}
+	SQL   string
+	Shape string
 }
 
 func (l *limitItem) Type() int {
 	return _limit
 }
 
+func (l *limitItem) ShapeKeyPart() string {
+	return l.Shape
+}
+
 func (l *limitItem) BuildSQL(sb *strings.Builder) {
-	sb.WriteString(" limit ?")
-	if len(l.I) > 1 {
-		sb.WriteString(" offset ?")
+	if l.SQL != "" {
+		sb.WriteString(l.SQL)
+		return
 	}
+	sb.WriteString(buildLimitSQL(l.I))
 }
 
 func (l *limitItem) BuildArgs(stmtArgs *[]interface{}) {
@@ -2878,6 +3286,85 @@ func scanFromString(isTime bool, st reflect2.Type, dt reflect2.Type, ptrVal unsa
 	return nil
 }
 
+func setSignedIntegerValue(ptr unsafe.Pointer, kind reflect.Kind, v int64) error {
+	switch kind {
+	case reflect.Int:
+		if strconv.IntSize == 32 && (v < math.MinInt32 || v > math.MaxInt32) {
+			return fmt.Errorf("value out of range")
+		}
+		*(*int)(ptr) = int(v)
+	case reflect.Int8:
+		if v < math.MinInt8 || v > math.MaxInt8 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*int8)(ptr) = int8(v)
+	case reflect.Int16:
+		if v < math.MinInt16 || v > math.MaxInt16 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*int16)(ptr) = int16(v)
+	case reflect.Int32:
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*int32)(ptr) = int32(v)
+	case reflect.Int64:
+		*(*int64)(ptr) = v
+	default:
+		return fmt.Errorf("unsupported signed integer kind %s", kind)
+	}
+	return nil
+}
+
+func setUnsignedIntegerValue(ptr unsafe.Pointer, kind reflect.Kind, v int64) error {
+	if v < 0 {
+		return fmt.Errorf("value out of range")
+	}
+	uv := uint64(v)
+	switch kind {
+	case reflect.Uint:
+		if strconv.IntSize == 32 && uv > math.MaxUint32 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*uint)(ptr) = uint(uv)
+	case reflect.Uint8:
+		if uv > math.MaxUint8 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*uint8)(ptr) = uint8(uv)
+	case reflect.Uint16:
+		if uv > math.MaxUint16 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*uint16)(ptr) = uint16(uv)
+	case reflect.Uint32:
+		if uv > math.MaxUint32 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*uint32)(ptr) = uint32(uv)
+	case reflect.Uint64:
+		*(*uint64)(ptr) = uv
+	default:
+		return fmt.Errorf("unsupported unsigned integer kind %s", kind)
+	}
+	return nil
+}
+
+func setFloatValue(ptr unsafe.Pointer, kind reflect.Kind, v float64) error {
+	switch kind {
+	case reflect.Float32:
+		if v > math.MaxFloat32 || v < -math.MaxFloat32 {
+			return fmt.Errorf("value out of range")
+		}
+		*(*float32)(ptr) = float32(v)
+	case reflect.Float64:
+		*(*float64)(ptr) = v
+	default:
+		return fmt.Errorf("unsupported float kind %s", kind)
+	}
+	return nil
+}
+
 func (dest *scanner) Scan(src interface{}) error {
 	var (
 		st = reflect2.TypeOf(src)
@@ -2954,30 +3441,53 @@ func (dest *scanner) Scan(src interface{}) error {
 		case reflect.Float64:
 			*(*bool)(dest.Val) = (src.(float64) != 0)
 		}
-	case reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		switch sk {
 		case reflect.Bool:
 			if src.(bool) {
-				*(*int64)(dest.Val) = int64(1)
-			} else {
-				*(*int64)(dest.Val) = int64(0)
+				return setSignedIntegerValue(dest.Val, dk, 1)
 			}
-		case reflect.Float64:
-			*(*int64)(dest.Val) = int64(src.(float64))
-		}
-	case reflect.Float64:
-		switch sk {
-		case reflect.Bool:
-			if src.(bool) {
-				*(*float64)(dest.Val) = float64(1)
-			} else {
-				*(*float64)(dest.Val) = float64(0)
-			}
+			return setSignedIntegerValue(dest.Val, dk, 0)
 		case reflect.Int64:
-			*(*float64)(dest.Val) = float64(src.(int64))
+			if err := setSignedIntegerValue(dest.Val, dk, src.(int64)); err != nil {
+				return fmt.Errorf("converting driver.Value type %s (%v) to a %s: %v", st.String(), src, dk, err)
+			}
+			return nil
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		switch sk {
+		case reflect.Bool:
+			if src.(bool) {
+				return setUnsignedIntegerValue(dest.Val, dk, 1)
+			}
+			return setUnsignedIntegerValue(dest.Val, dk, 0)
+		case reflect.Int64:
+			if err := setUnsignedIntegerValue(dest.Val, dk, src.(int64)); err != nil {
+				return fmt.Errorf("converting driver.Value type %s (%v) to a %s: %v", st.String(), src, dk, err)
+			}
+			return nil
+		}
+	case reflect.Float32, reflect.Float64:
+		switch sk {
+		case reflect.Bool:
+			if src.(bool) {
+				return setFloatValue(dest.Val, dk, 1)
+			}
+			return setFloatValue(dest.Val, dk, 0)
+		case reflect.Int64:
+			if err := setFloatValue(dest.Val, dk, float64(src.(int64))); err != nil {
+				return fmt.Errorf("converting driver.Value type %s (%v) to a %s: %v", st.String(), src, dk, err)
+			}
+			return nil
+		case reflect.Float64:
+			if err := setFloatValue(dest.Val, dk, src.(float64)); err != nil {
+				return fmt.Errorf("converting driver.Value type %s (%v) to a %s: %v", st.String(), src, dk, err)
+			}
+			return nil
 		}
 	case reflect.String:
 		*(*string)(dest.Val) = numberToString(sk, src)
+		return nil
 	default:
 		// number => []byte
 		if dk == reflect.Slice && dt.(reflect2.SliceType).Elem().Kind() == reflect.Uint8 {
@@ -2993,13 +3503,22 @@ type ormCond struct {
 	Field string
 	Op    string
 	Args  []interface{}
+	SQL   string
 }
 
 func (c *ormCond) Type() int {
 	return _cond
 }
 
+func (c *ormCond) ShapeKeyPart() string {
+	return buildItemShapePart(_cond, c.SQL)
+}
+
 func (c *ormCond) BuildSQL(sb *strings.Builder) {
+	if c.SQL != "" {
+		sb.WriteString(c.SQL)
+		return
+	}
 	if c.Field != "" {
 		fieldEscape(sb, c.Field)
 	}
@@ -3017,6 +3536,10 @@ type ormExpr struct {
 	Args []interface{}
 }
 
+func (e *ormExpr) ShapeKeyPart() string {
+	return buildItemShapePart(_cond, e.SQL)
+}
+
 func (e *ormExpr) BuildSQL(sb *strings.Builder) { sb.WriteString(e.SQL) }
 func (e *ormExpr) BuildArgs(stmtArgs *[]interface{}) {
 	*stmtArgs = append(*stmtArgs, e.Args...)
@@ -3025,13 +3548,22 @@ func (e *ormExpr) BuildArgs(stmtArgs *[]interface{}) {
 type ormCondEx struct {
 	Ty    int
 	Conds []interface{}
+	SQL   string
 }
 
 func (cx *ormCondEx) Type() int {
 	return cx.Ty
 }
 
+func (cx *ormCondEx) ShapeKeyPart() string {
+	return buildItemShapePart(cx.Ty, cx.SQL)
+}
+
 func (cx *ormCondEx) BuildSQL(sb *strings.Builder) {
+	if cx.SQL != "" {
+		sb.WriteString(cx.SQL)
+		return
+	}
 	for i, c := range cx.Conds {
 		if i > 0 {
 			switch cx.Ty {
@@ -3075,69 +3607,70 @@ func (cx *ormCondEx) BuildArgs(stmtArgs *[]interface{}) {
 
 // And .
 func And(conds ...interface{}) *ormCondEx {
-	return &ormCondEx{Ty: _andCondEx, Conds: conds}
+	return &ormCondEx{Ty: _andCondEx, Conds: conds, SQL: buildCondExSQL(_andCondEx, conds)}
 }
 
 // Or .
 func Or(conds ...interface{}) *ormCondEx {
-	return &ormCondEx{Ty: _orCondEx, Conds: conds}
+	return &ormCondEx{Ty: _orCondEx, Conds: conds, SQL: buildCondExSQL(_orCondEx, conds)}
 }
 
 // Cond .
 func Cond(c string, args ...interface{}) *ormCond {
-	return &ormCond{Op: c, Args: args}
+	return &ormCond{Op: c, Args: args, SQL: c}
 }
 
 // Expr allows building a custom SQL condition fragment with args, and is usable inside And/Or.
 // Example:
-//   Where(And(Eq("a", 1), Expr("json_extract(data,'$.x') = ?", 2)))
+//
+//	Where(And(Eq("a", 1), Expr("json_extract(data,'$.x') = ?", 2)))
 func Expr(sql string, args ...interface{}) *ormExpr {
 	return &ormExpr{SQL: sql, Args: args}
 }
 
 // Eq .
 func Eq(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: "=?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: "=?", Args: []interface{}{i}, SQL: buildCondSQL(field, "=?")}
 }
 
 // Neq .
 func Neq(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: "<>?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: "<>?", Args: []interface{}{i}, SQL: buildCondSQL(field, "<>?")}
 }
 
 // Gt .
 func Gt(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: ">?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: ">?", Args: []interface{}{i}, SQL: buildCondSQL(field, ">?")}
 }
 
 // Gte .
 func Gte(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: ">=?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: ">=?", Args: []interface{}{i}, SQL: buildCondSQL(field, ">=?")}
 }
 
 // Lt .
 func Lt(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: "<?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: "<?", Args: []interface{}{i}, SQL: buildCondSQL(field, "<?")}
 }
 
 // Lte .
 func Lte(field string, i interface{}) *ormCond {
-	return &ormCond{Field: field, Op: "<=?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: "<=?", Args: []interface{}{i}, SQL: buildCondSQL(field, "<=?")}
 }
 
 // Between .
 func Between(field string, i interface{}, j interface{}) *ormCond {
-	return &ormCond{Field: field, Op: " between ? and ?", Args: []interface{}{i, j}}
+	return &ormCond{Field: field, Op: " between ? and ?", Args: []interface{}{i, j}, SQL: buildCondSQL(field, " between ? and ?")}
 }
 
 // Like .
 func Like(field string, pattern string) *ormCond {
-	return &ormCond{Field: field, Op: " like ?", Args: []interface{}{pattern}}
+	return &ormCond{Field: field, Op: " like ?", Args: []interface{}{pattern}, SQL: buildCondSQL(field, " like ?")}
 }
 
 // GLOB .
 func GLOB(field string, pattern string) *ormCond {
-	return &ormCond{Field: field, Op: " glob ?", Args: []interface{}{pattern}}
+	return &ormCond{Field: field, Op: " glob ?", Args: []interface{}{pattern}, SQL: buildCondSQL(field, " glob ?")}
 }
 
 // In .
@@ -3145,7 +3678,7 @@ func In(field string, args ...interface{}) *ormCond {
 RETRY:
 	switch len(args) {
 	case 0:
-		return &ormCond{Op: "1=1"}
+		return &ormCond{Op: "1=1", SQL: "1=1"}
 	case 1:
 		rt := reflect2.TypeOf(args[0])
 		// 如果第一个参数是数组，转化成interface数组
@@ -3162,7 +3695,7 @@ RETRY:
 			// 即使只有一个元素也使用IN，保持SQL形状一致，防止缓存失效
 			var sb strings.Builder
 			sb.WriteString(" in (?)")
-			return &ormCond{Field: field, Op: sb.String(), Args: []interface{}{args[0]}}
+			return &ormCond{Field: field, Op: sb.String(), Args: []interface{}{args[0]}, SQL: buildCondSQL(field, sb.String())}
 		}
 	}
 
@@ -3175,32 +3708,36 @@ RETRY:
 		sb.WriteString("?")
 	}
 	sb.WriteString(")")
-	return &ormCond{Field: field, Op: sb.String(), Args: args}
+	return &ormCond{Field: field, Op: sb.String(), Args: args, SQL: buildCondSQL(field, sb.String())}
 }
 
 // IsNot builds an "IS NOT" condition.
 // If i is nil, it becomes "IS NOT NULL" (no args).
 func IsNot(field string, i interface{}) *ormCond {
 	if i == nil {
-		return &ormCond{Field: field, Op: " is not null"}
+		return &ormCond{Field: field, Op: " is not null", SQL: buildCondSQL(field, " is not null")}
 	}
-	return &ormCond{Field: field, Op: " is not ?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: " is not ?", Args: []interface{}{i}, SQL: buildCondSQL(field, " is not ?")}
 }
 
 // IsNotNull is a convenience for "IS NOT NULL".
-func IsNotNull(field string) *ormCond { return &ormCond{Field: field, Op: " is not null"} }
+func IsNotNull(field string) *ormCond {
+	return &ormCond{Field: field, Op: " is not null", SQL: buildCondSQL(field, " is not null")}
+}
 
 // Is builds an "IS" condition.
 // If i is nil, it becomes "IS NULL" (no args).
 func Is(field string, i interface{}) *ormCond {
 	if i == nil {
-		return &ormCond{Field: field, Op: " is null"}
+		return &ormCond{Field: field, Op: " is null", SQL: buildCondSQL(field, " is null")}
 	}
-	return &ormCond{Field: field, Op: " is ?", Args: []interface{}{i}}
+	return &ormCond{Field: field, Op: " is ?", Args: []interface{}{i}, SQL: buildCondSQL(field, " is ?")}
 }
 
 // IsNull is a convenience for "IS NULL".
-func IsNull(field string) *ormCond { return &ormCond{Field: field, Op: " is null"} }
+func IsNull(field string) *ormCond {
+	return &ormCond{Field: field, Op: " is null", SQL: buildCondSQL(field, " is null")}
+}
 
 /*
 	data-binding相关
@@ -3209,11 +3746,172 @@ func IsNull(field string) *ormCond { return &ormCond{Field: field, Op: " is null
 // DataBindingItem .
 
 type DataBindingItem struct {
-	SQL    string
-	Cols   []interface{}
-	Type   reflect2.Type
-	Elem   interface{}
-	Fields []string // 用于Map类型的字段名
+	SQL      string
+	Cols     []interface{}
+	Type     reflect2.Type
+	Elem     interface{}
+	Fields   []string // 用于Map类型的字段名
+	SCols    []reflect2.StructField
+	ArgIndex [][]int
+}
+
+type selectScanBinding struct {
+	Cols     []interface{}
+	Scanners []scanner
+}
+
+func bindSelectScanCols(item *DataBindingItem, elem interface{}) *selectScanBinding {
+	n := len(item.SCols)
+	if n == 0 {
+		n = 1
+	}
+	binding := getSelectScanBinding(n)
+	if len(item.SCols) > 0 {
+		ptr := reflect2.PtrOf(elem)
+		for i, field := range item.SCols {
+			binding.Scanners[i] = scanner{Type: field.Type(), Val: field.UnsafeGet(ptr)}
+			binding.Cols[i] = &binding.Scanners[i]
+		}
+		binding.Scanners = binding.Scanners[:len(item.SCols)]
+		binding.Cols = binding.Cols[:len(item.SCols)]
+		return binding
+	}
+
+	binding.Scanners[0] = scanner{Type: item.Type, Val: reflect2.PtrOf(elem)}
+	binding.Cols[0] = &binding.Scanners[0]
+	binding.Scanners = binding.Scanners[:1]
+	binding.Cols = binding.Cols[:1]
+	return binding
+}
+
+func getSelectScanBinding(n int) *selectScanBinding {
+	binding := _selectScanBindingPool.Get().(*selectScanBinding)
+	if cap(binding.Cols) < n {
+		binding.Cols = make([]interface{}, n)
+	} else {
+		binding.Cols = binding.Cols[:n]
+	}
+	if cap(binding.Scanners) < n {
+		binding.Scanners = make([]scanner, n)
+	} else {
+		binding.Scanners = binding.Scanners[:n]
+	}
+	return binding
+}
+
+func putSelectScanBinding(binding *selectScanBinding) {
+	for i := range binding.Cols {
+		binding.Cols[i] = nil
+	}
+	for i := range binding.Scanners {
+		binding.Scanners[i] = scanner{}
+	}
+	_selectScanBindingPool.Put(binding)
+}
+
+type mapScanBinding struct {
+	Values []interface{}
+	Ptrs   []interface{}
+}
+
+func getMapScanBinding(n int) *mapScanBinding {
+	binding := _mapScanBindingPool.Get().(*mapScanBinding)
+	if cap(binding.Values) < n {
+		binding.Values = make([]interface{}, n)
+	} else {
+		binding.Values = binding.Values[:n]
+	}
+	if cap(binding.Ptrs) < n {
+		binding.Ptrs = make([]interface{}, n)
+	} else {
+		binding.Ptrs = binding.Ptrs[:n]
+	}
+	for i := 0; i < n; i++ {
+		binding.Values[i] = nil
+		binding.Ptrs[i] = &binding.Values[i]
+	}
+	return binding
+}
+
+func putMapScanBinding(binding *mapScanBinding) {
+	for i := range binding.Values {
+		binding.Values[i] = nil
+	}
+	for i := range binding.Ptrs {
+		binding.Ptrs[i] = nil
+	}
+	_mapScanBindingPool.Put(binding)
+}
+
+func fillReflectMap(mapVal reflect.Value, fields []string, values []interface{}) {
+	for i, field := range fields {
+		setReflectMapValue(mapVal, field, values[i])
+	}
+}
+
+func isStringAnyMapType(rt reflect2.Type) bool {
+	if rt == nil || rt.Kind() != reflect.Map {
+		return false
+	}
+	return rt.(reflect2.MapType).Type1() == mapStringAnyType
+}
+
+func buildStringAnyMap(fields []string, values []interface{}) map[string]interface{} {
+	m := make(map[string]interface{}, len(fields))
+	for i, field := range fields {
+		m[field] = values[i]
+	}
+	return m
+}
+
+func dataBindingStructFields(item *DataBindingItem) []reflect2.StructField {
+	if item == nil {
+		return nil
+	}
+	if len(item.SCols) > 0 {
+		return item.SCols
+	}
+	if len(item.Cols) == 0 {
+		return nil
+	}
+
+	cols := make([]reflect2.StructField, 0, len(item.Cols))
+	for _, col := range item.Cols {
+		field, ok := col.(reflect2.StructField)
+		if !ok {
+			return nil
+		}
+		cols = append(cols, field)
+	}
+	item.SCols = cols
+	return cols
+}
+
+func ensureStructArgIndexes(item *DataBindingItem, s reflect2.StructType, cols []reflect2.StructField) [][]int {
+	if item == nil || len(cols) == 0 {
+		return nil
+	}
+	if len(item.ArgIndex) == len(cols) {
+		return item.ArgIndex
+	}
+
+	rt := s.Type1()
+	if rt == nil {
+		return nil
+	}
+
+	indexes := make([][]int, len(cols))
+	for i, col := range cols {
+		field, ok := rt.FieldByName(col.Name())
+		if !ok {
+			continue
+		}
+		index := make([]int, len(field.Index))
+		copy(index, field.Index)
+		indexes[i] = index
+	}
+	item.ArgIndex = indexes
+	return indexes
 }
 
 var _dataBindingCache sync.Map
@@ -3354,35 +4052,56 @@ func buildCacheKey(file string, line int) string {
 	builder.Reset()
 	builder.WriteString(file)
 	builder.WriteString(":")
-	builder.WriteString(fmt.Sprintf("%d", line))
+	builder.WriteString(strconv.Itoa(line))
 	key := builder.String()
 	_cacheKeyPool.Put(builder)
 	return key
 }
 
 func getCallSite() *CallSite {
-	pc := make([]uintptr, 1)
-	runtime.Callers(2, pc) // 跳过getCallSite和调用者
-	callerPC := pc[0]
+	var direct [1]uintptr
+	if n := runtime.Callers(3, direct[:]); n == 1 && direct[0] != 0 {
+		callerPC := direct[0] - 1
+		if cached, ok := _callSiteCache.Load(callerPC); ok {
+			return cached.(*CallSite)
+		}
+		if fn := runtime.FuncForPC(callerPC); fn != nil && !strings.HasPrefix(fn.Name(), zormPackagePrefix) {
+			file, line := fn.FileLine(callerPC)
+			callSite := &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
+			_callSiteCache.Store(callerPC, callSite)
+			return callSite
+		}
+	}
 
-	if cached, ok := _callSiteCache.Load(callerPC); ok {
-		return cached.(*CallSite)
+	var pcs [8]uintptr
+	n := runtime.Callers(2, pcs[:])
+	for i := 0; i < n; i++ {
+		if pcs[i] == 0 {
+			continue
+		}
+		callerPC := pcs[i] - 1
+		if cached, ok := _callSiteCache.Load(callerPC); ok {
+			return cached.(*CallSite)
+		}
+		fn := runtime.FuncForPC(callerPC)
+		if fn == nil || strings.HasPrefix(fn.Name(), zormPackagePrefix) {
+			continue
+		}
+		file, line := fn.FileLine(callerPC)
+		callSite := &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
+		_callSiteCache.Store(callerPC, callSite)
+		return callSite
 	}
 
 	_, file, line, _ := runtime.Caller(1)
-	key := buildCacheKey(file, line)
-	callSite := &CallSite{
-		File: file,
-		Line: line,
-		Key:  key,
-	}
-	_callSiteCache.Store(callerPC, callSite)
-	return callSite
+	return &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
 }
 
 var (
-	_callSiteCache sync.Map // map[uintptr]*CallSite
-	_cacheKeyPool  = sync.Pool{
+	mapStringAnyType  = reflect.TypeOf(map[string]interface{}{})
+	zormPackagePrefix = reflect.TypeOf(ZormTable{}).PkgPath() + "."
+	_callSiteCache    sync.Map // map[uintptr]*CallSite
+	_cacheKeyPool     = sync.Pool{
 		New: func() interface{} {
 			return &strings.Builder{}
 		},
@@ -3399,6 +4118,23 @@ var (
 			return make([]interface{}, 0, 16)
 		},
 	}
+	_selectScanBindingPool = sync.Pool{
+		New: func() interface{} {
+			return &selectScanBinding{}
+		},
+	}
+	_mapScanBindingPool = sync.Pool{
+		New: func() interface{} {
+			return &mapScanBinding{}
+		},
+	}
+	_shapeKeyBufferPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 0, 128)
+		},
+	}
+	_shapeKeyStringCache   sync.Map
+	_stmtCacheWrapperCache sync.Map
 )
 
 type CallSite struct {
@@ -3425,7 +4161,6 @@ func getArgsSlice() []interface{} {
 
 // putArgsSlice 将参数切片放回池中
 func putArgsSlice(args []interface{}) {
-	// 清空切片但保留容量
 	args = args[:0]
 	_argsPool.Put(args)
 }
@@ -3543,35 +4278,33 @@ func DefaultDDLConfig() *DDLConfig {
 
 // NewReadWriteDB 创建读写分离数据库
 func NewReadWriteDB(master ZormDBIFace, slaves ...ZormDBIFace) *ReadWriteDB {
+	wrappedSlaves := make([]ZormDBIFace, len(slaves))
+	for i, slave := range slaves {
+		wrappedSlaves[i] = wrapDefaultStmtCacheDB(slave)
+	}
 	return &ReadWriteDB{
-		Master: master,
-		Slaves: slaves,
+		Master: wrapDefaultStmtCacheDB(master),
+		Slaves: wrappedSlaves,
 		index:  0,
 	}
 }
 
+func (rw *ReadWriteDB) nextReadDB() ZormDBIFace {
+	if len(rw.Slaves) == 0 {
+		return rw.Master
+	}
+	idx := atomic.AddInt64(&rw.index, 1) - 1
+	return rw.Slaves[int(idx%int64(len(rw.Slaves)))]
+}
+
 // QueryRowContext 实现 ZormDBIFace 接口（读操作使用从库）
 func (rw *ReadWriteDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	if len(rw.Slaves) == 0 {
-		return rw.Master.QueryRowContext(ctx, query, args...)
-	}
-
-	// 轮询选择从库
-	slave := rw.Slaves[rw.index%int64(len(rw.Slaves))]
-	atomic.AddInt64(&rw.index, 1)
-	return slave.QueryRowContext(ctx, query, args...)
+	return rw.nextReadDB().QueryRowContext(ctx, query, args...)
 }
 
 // QueryContext 实现 ZormDBIFace 接口（读操作使用从库）
 func (rw *ReadWriteDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	if len(rw.Slaves) == 0 {
-		return rw.Master.QueryContext(ctx, query, args...)
-	}
-
-	// 轮询选择从库
-	slave := rw.Slaves[rw.index%int64(len(rw.Slaves))]
-	atomic.AddInt64(&rw.index, 1)
-	return slave.QueryContext(ctx, query, args...)
+	return rw.nextReadDB().QueryContext(ctx, query, args...)
 }
 
 // ExecContext 实现 ZormDBIFace 接口（写操作使用主库）

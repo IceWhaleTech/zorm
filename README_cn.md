@@ -517,6 +517,11 @@
       Audit(nil, nil)    // 启用审计日志
    ```
 
+说明：
+- `Audit(nil, nil)` 现在会真正包装当前 DB，启用可用的审计与遥测链路，而不是占位 no-op。
+- `NewDefaultTelemetryCollectorWithLimit(n)` 可用于只保留最近 `n` 条遥测记录，避免内存无限增长。
+- `Table(...)`、`TableContext(...)`、`NewReadWriteDB(...)` 和 `NewAuditableDB(...)` 现在会在底层 DB 支持 `PrepareContext` 时自动启用有界 prepared statement 缓存；也可以显式使用 `NewStmtCacheDB(db, n)` 包装。
+
 ### Where
 
 |示例|说明|
@@ -524,6 +529,8 @@
 |Where("id=? and name=?", id, name)|常规格式化版本|
 |Where(Eq("id", id), Eq("name", name)...)|默认为and连接|
 |Where(And(Eq("x", x), Eq("y", y), Or(Eq("x", x), Eq("y", y)...)...)...)|And & Or|
+
+如需避免 `panic`，可使用 `TryWhere(...)`。
 
 ### 预置Where条件
 
@@ -557,6 +564,8 @@
 |Having(Eq("id", id), Eq("name", name)...)|默认为and连接|
 |Having(And(Eq("x", x), Eq("y", y), Or(Eq("x", x), Eq("y", y)...)...)...)|And & Or|
 
+如需避免 `panic`，可使用 `TryHaving(...)`。
+
 ### OrderBy
 
 |示例|说明|
@@ -569,6 +578,8 @@
 |-|-|
 |Limit(1)|分页大小为1|
 |Limit(3, 2)|分页大小为3，偏移位置为2 **（注意和MySQL的区别）**|
+
+如需避免 `panic`，可使用 `TryLimit(...)`。
 
 ### OnConflictDoUpdateSet
 

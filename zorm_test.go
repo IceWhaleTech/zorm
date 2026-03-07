@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2524,13 +2526,26 @@ func TestNewReadWriteDB(t *testing.T) {
 	Convey("NewReadWriteDB", t, func() {
 		rwdb := zorm.NewReadWriteDB(db)
 		So(rwdb, ShouldNotBeNil)
-		So(rwdb.Master, ShouldEqual, db)
+		if wrapped, ok := rwdb.Master.(*zorm.StmtCacheDB); ok {
+			So(wrapped.Unwrap(), ShouldEqual, db)
+		} else {
+			So(rwdb.Master, ShouldEqual, db)
+		}
 
 		// Test with slaves
 		rwdb2 := zorm.NewReadWriteDB(db, db)
 		So(rwdb2, ShouldNotBeNil)
-		So(rwdb2.Master, ShouldEqual, db)
+		if wrapped, ok := rwdb2.Master.(*zorm.StmtCacheDB); ok {
+			So(wrapped.Unwrap(), ShouldEqual, db)
+		} else {
+			So(rwdb2.Master, ShouldEqual, db)
+		}
 		So(len(rwdb2.Slaves), ShouldEqual, 1)
+		if wrapped, ok := rwdb2.Slaves[0].(*zorm.StmtCacheDB); ok {
+			So(wrapped.Unwrap(), ShouldEqual, db)
+		} else {
+			So(rwdb2.Slaves[0], ShouldEqual, db)
+		}
 	})
 }
 
@@ -10174,4 +10189,705 @@ func TestInsertWithAutoIncrementIDInNonPointerSlice(t *testing.T) {
 			}
 		}
 	})
+}
+
+func toInt64(t *testing.T, value interface{}) int64 {
+	t.Helper()
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int16:
+		return int64(typed)
+	case int8:
+		return int64(typed)
+	case uint64:
+		return int64(typed)
+	case uint:
+		return int64(typed)
+	case []byte:
+		var parsed int64
+		_, err := fmt.Sscanf(string(typed), "%d", &parsed)
+		if err == nil {
+			return parsed
+		}
+	}
+	t.Fatalf("unsupported integer value: %#v", value)
+	return 0
+}
+
+type readWriteStubDB struct{}
+
+func (s *readWriteStubDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return &sql.Row{}
+}
+
+func (s *readWriteStubDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return nil, nil
+}
+
+func (s *readWriteStubDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return nil, nil
+}
+
+func TestUpdateSkipsAutoIncrementFieldByDefault(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users")
+
+	user := User{Name: "Skip Auto", Email: "skipauto@example.com", Age: 25, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	updated := User{ID: 0, Name: "Skip Auto Updated", Email: user.Email, Age: 31, CreatedAt: user.CreatedAt}
+	if _, err := tbl.Update(&updated, zorm.Where("id = ?", user.ID)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := tbl.Select(&result, zorm.Fields("id", "name", "age"), zorm.Where("name = ?", "Skip Auto Updated")); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+
+	if gotID := toInt64(t, result["id"]); gotID != user.ID {
+		t.Fatalf("expected id to remain %d, got %d", user.ID, gotID)
+	}
+}
+
+func TestSelectMapKeepsNullKeys(t *testing.T) {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS test_null_map (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT,
+		note TEXT
+	)`); err != nil {
+		t.Fatalf("create table failed: %v", err)
+	}
+	defer db.Exec("DELETE FROM test_null_map")
+
+	if _, err := db.Exec(`INSERT INTO test_null_map(name, note) VALUES (?, ?)`, "null-key", nil); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := zorm.Table(db, "test_null_map").Select(&result, zorm.Fields("name", "note"), zorm.Where("name = ?", "null-key")); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+
+	if _, ok := result["note"]; !ok {
+		t.Fatalf("expected note key to exist, got map %#v", result)
+	}
+	if result["note"] != nil {
+		t.Fatalf("expected note to be nil, got %#v", result["note"])
+	}
+}
+
+func TestTryBuilders(t *testing.T) {
+	if _, err := zorm.TryWhere(); err == nil {
+		t.Fatal("expected TryWhere to reject empty input")
+	}
+	if _, err := zorm.TryHaving(); err == nil {
+		t.Fatal("expected TryHaving to reject empty input")
+	}
+	if _, err := zorm.TryLimit(); err == nil {
+		t.Fatal("expected TryLimit to reject empty input")
+	}
+	if _, err := zorm.TryLimit(1, 2, 3); err == nil {
+		t.Fatal("expected TryLimit to reject too many args")
+	}
+	if _, err := zorm.TryWhere(zorm.Eq("id", 1)); err != nil {
+		t.Fatalf("expected TryWhere success, got %v", err)
+	}
+}
+
+func TestFileAuditLoggerWritesJSON(t *testing.T) {
+	file, err := os.CreateTemp("", "zorm-audit-*.log")
+	if err != nil {
+		t.Fatalf("temp file failed: %v", err)
+	}
+	path := file.Name()
+	file.Close()
+	defer os.Remove(path)
+
+	logger := zorm.NewFileAuditLogger(path)
+	logger.LogAuditEvent(context.Background(), &zorm.SQLAuditEvent{ID: "evt-file", SQL: "SELECT 1", Operation: "SELECT"})
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file failed: %v", err)
+	}
+	if !strings.Contains(string(content), "evt-file") {
+		t.Fatalf("expected event id in file, got %s", string(content))
+	}
+}
+
+func TestTelemetryCollectorLimit(t *testing.T) {
+	collector := zorm.NewDefaultTelemetryCollectorWithLimit(2)
+	collector.CollectTelemetry(context.Background(), &zorm.TelemetryData{ID: "1", Operation: "SELECT"})
+	collector.CollectTelemetry(context.Background(), &zorm.TelemetryData{ID: "2", Operation: "SELECT"})
+	collector.CollectTelemetry(context.Background(), &zorm.TelemetryData{ID: "3", Operation: "SELECT"})
+
+	recent := collector.GetRecentTelemetry()
+	if len(recent) != 2 {
+		t.Fatalf("expected 2 telemetry entries, got %d", len(recent))
+	}
+	if recent[0].ID != "2" || recent[1].ID != "3" {
+		t.Fatalf("expected rolling window [2 3], got %#v", recent)
+	}
+}
+
+func TestReadWriteDBConcurrentReads(t *testing.T) {
+	rw := zorm.NewReadWriteDB(&readWriteStubDB{}, &readWriteStubDB{}, &readWriteStubDB{})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				if _, err := rw.QueryContext(context.Background(), "SELECT 1"); err != nil {
+					t.Errorf("query failed: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestReuseCacheForInsertAndUpdate(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	insertUser := func(name, email string) (*User, error) {
+		user := &User{Name: name, Email: email, Age: 20, CreatedAt: time.Now()}
+		_, err := tbl.Insert(user)
+		return user, err
+	}
+
+	first, err := insertUser("Reuse Insert 1", "reuseinsert1@example.com")
+	if err != nil {
+		t.Fatalf("first insert failed: %v", err)
+	}
+	second, err := insertUser("Reuse Insert 2", "reuseinsert2@example.com")
+	if err != nil {
+		t.Fatalf("second insert failed: %v", err)
+	}
+	if second.ID <= first.ID {
+		t.Fatalf("expected increasing ids, got %d then %d", first.ID, second.ID)
+	}
+
+	updateAge := func(id int64, age int) error {
+		_, err := tbl.Update(&User{Age: age}, zorm.Fields("age"), zorm.Where("id = ?", id))
+		return err
+	}
+	if err := updateAge(first.ID, 33); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+	if err := updateAge(first.ID, 44); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
+	var result User
+	if _, err := tbl.Select(&result, zorm.Where("id = ?", first.ID)); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if result.Age != 44 {
+		t.Fatalf("expected age 44 after cached updates, got %d", result.Age)
+	}
+}
+
+type countingWhereItem struct {
+	sql        string
+	args       []interface{}
+	buildCalls int
+}
+
+func (c *countingWhereItem) Type() int { return 1 << 20 }
+
+func (c *countingWhereItem) ShapeKeyPart() string {
+	return "counting-where:" + c.sql
+}
+
+func (c *countingWhereItem) BuildSQL(sb *strings.Builder) {
+	c.buildCalls++
+	sb.WriteString(c.sql)
+}
+
+func (c *countingWhereItem) BuildArgs(stmtArgs *[]interface{}) {
+	*stmtArgs = append(*stmtArgs, c.args...)
+}
+
+func TestSelectReuseBindsCurrentDestination(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Reuse Bound Target", Email: "reuse-bound-target@example.com", Age: 26, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	run := func(dest *User) (int, error) {
+		return tbl.Select(dest, zorm.Where("id = ?", user.ID))
+	}
+
+	var first User
+	n, err := run(&first)
+	if err != nil {
+		t.Fatalf("first select failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected first select count 1, got %d", n)
+	}
+	if first.Name != user.Name {
+		t.Fatalf("expected first select name %q, got %q", user.Name, first.Name)
+	}
+
+	first.Name = "mutated-locally"
+
+	var second User
+	n, err = run(&second)
+	if err != nil {
+		t.Fatalf("second select failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected second select count 1, got %d", n)
+	}
+	if first.Name != "mutated-locally" {
+		t.Fatalf("expected first result to stay locally mutated, got %q", first.Name)
+	}
+	if second.Name != user.Name || second.Email != user.Email || second.Age != user.Age {
+		t.Fatalf("expected second result to be freshly populated, got %+v", second)
+	}
+}
+
+func TestSelectReuseSkipsSQLRebuildOnSameCallSite(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Reuse BuildSQL", Email: "reuse-buildsql@example.com", Age: 31, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	where := &countingWhereItem{sql: " where id = ?", args: []interface{}{user.ID}}
+	run := func(dest *User) (int, error) {
+		return tbl.Select(dest, where)
+	}
+
+	var first User
+	if _, err := run(&first); err != nil {
+		t.Fatalf("first select failed: %v", err)
+	}
+	var second User
+	if _, err := run(&second); err != nil {
+		t.Fatalf("second select failed: %v", err)
+	}
+	if where.buildCalls != 1 {
+		t.Fatalf("expected cached select to build SQL once, got %d", where.buildCalls)
+	}
+}
+
+func TestSelectWithFieldsReuseSkipsSQLRebuildOnSameCallSite(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Reuse Fields BuildSQL", Email: "reuse-fields-buildsql@example.com", Age: 29, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	where := &countingWhereItem{sql: " where id = ?", args: []interface{}{user.ID}}
+	run := func(dest *User) (int, error) {
+		return tbl.Select(dest, zorm.Fields("name", "email"), where)
+	}
+
+	var first User
+	if _, err := run(&first); err != nil {
+		t.Fatalf("first select failed: %v", err)
+	}
+	var second User
+	if _, err := run(&second); err != nil {
+		t.Fatalf("second select failed: %v", err)
+	}
+	if where.buildCalls != 1 {
+		t.Fatalf("expected cached select with fields to build SQL once, got %d", where.buildCalls)
+	}
+	if second.Name != user.Name || second.Email != user.Email {
+		t.Fatalf("expected cached select with fields to populate selected columns, got %+v", second)
+	}
+}
+
+func TestSelectReuseDifferentiatesBareCondShape(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	first := User{Name: "Bare Cond 1", Email: "bare-cond-1@example.com", Age: 21, CreatedAt: time.Now()}
+	second := User{Name: "Bare Cond 2", Email: "bare-cond-2@example.com", Age: 34, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&first); err != nil {
+		t.Fatalf("insert first failed: %v", err)
+	}
+	if _, err := tbl.Insert(&second); err != nil {
+		t.Fatalf("insert second failed: %v", err)
+	}
+
+	run := func(dest *[]User, cond interface{}) (int, error) {
+		return tbl.Select(dest, cond.(zorm.ZormItem))
+	}
+
+	var byID []User
+	n, err := run(&byID, zorm.Eq("id", first.ID))
+	if err != nil {
+		t.Fatalf("select by id failed: %v", err)
+	}
+	if n != 1 || len(byID) != 1 || byID[0].ID != first.ID {
+		t.Fatalf("expected first query to return first user, got %+v", byID)
+	}
+
+	var byEmail []User
+	n, err = run(&byEmail, zorm.Eq("email", second.Email))
+	if err != nil {
+		t.Fatalf("select by email failed: %v", err)
+	}
+	if n != 1 || len(byEmail) != 1 || byEmail[0].Email != second.Email {
+		t.Fatalf("expected second query to return second user, got %+v", byEmail)
+	}
+}
+
+func TestSelectReuseDifferentiatesCondTreeShape(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	first := User{Name: "Cond Tree 1", Email: "cond-tree-1@example.com", Age: 22, CreatedAt: time.Now()}
+	second := User{Name: "Cond Tree 2", Email: "cond-tree-2@example.com", Age: 35, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&first); err != nil {
+		t.Fatalf("insert first failed: %v", err)
+	}
+	if _, err := tbl.Insert(&second); err != nil {
+		t.Fatalf("insert second failed: %v", err)
+	}
+
+	run := func(dest *[]User, cond interface{}) (int, error) {
+		return tbl.Select(dest, cond.(zorm.ZormItem))
+	}
+
+	var byID []User
+	n, err := run(&byID, zorm.And(zorm.Eq("id", first.ID), zorm.Gt("age", 0)))
+	if err != nil {
+		t.Fatalf("select by cond tree id failed: %v", err)
+	}
+	if n != 1 || len(byID) != 1 || byID[0].ID != first.ID {
+		t.Fatalf("expected first cond tree query to return first user, got %+v", byID)
+	}
+
+	var byEmail []User
+	n, err = run(&byEmail, zorm.And(zorm.Eq("email", second.Email), zorm.Gt("age", 0)))
+	if err != nil {
+		t.Fatalf("select by cond tree email failed: %v", err)
+	}
+	if n != 1 || len(byEmail) != 1 || byEmail[0].Email != second.Email {
+		t.Fatalf("expected second cond tree query to return second user, got %+v", byEmail)
+	}
+}
+
+type prepareCountDB struct {
+	*sql.DB
+	prepareCount int64
+}
+
+func (db *prepareCountDB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	atomic.AddInt64(&db.prepareCount, 1)
+	return db.DB.PrepareContext(ctx, query)
+}
+
+func TestStmtCacheAutoWrapSharesPreparedStatementsAcrossTables(t *testing.T) {
+	setupTestTables(t)
+	countingDB := &prepareCountDB{DB: db}
+
+	user := User{Name: "Stmt Cache Select", Email: "stmt-cache-select@example.com", Age: 28, CreatedAt: time.Now()}
+	if _, err := zorm.Table(countingDB, "test_users").Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	atomic.StoreInt64(&countingDB.prepareCount, 0)
+
+	run := func() error {
+		var result User
+		_, err := zorm.Table(countingDB, "test_users").Select(&result, zorm.Fields("name", "email"), zorm.Where("id = ?", user.ID))
+		return err
+	}
+
+	if err := run(); err != nil {
+		t.Fatalf("first select failed: %v", err)
+	}
+	if err := run(); err != nil {
+		t.Fatalf("second select failed: %v", err)
+	}
+	if got := atomic.LoadInt64(&countingDB.prepareCount); got != 1 {
+		t.Fatalf("expected one prepared select statement across tables, got %d", got)
+	}
+}
+
+func TestStmtCacheAutoWrapCachesExecStatements(t *testing.T) {
+	setupTestTables(t)
+	countingDB := &prepareCountDB{DB: db}
+
+	user := User{Name: "Stmt Cache Update", Email: "stmt-cache-update@example.com", Age: 20, CreatedAt: time.Now()}
+	if _, err := zorm.Table(countingDB, "test_users").Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	atomic.StoreInt64(&countingDB.prepareCount, 0)
+
+	run := func(age int) error {
+		_, err := zorm.Table(countingDB, "test_users").Update(&User{Age: age}, zorm.Fields("age"), zorm.Where("id = ?", user.ID))
+		return err
+	}
+
+	if err := run(30); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+	if err := run(31); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+	if got := atomic.LoadInt64(&countingDB.prepareCount); got != 1 {
+		t.Fatalf("expected one prepared update statement across tables, got %d", got)
+	}
+}
+
+func TestSelectMapWildcardReuseSingleRecord(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Map Wildcard Single", Email: "mapwildcardsingle@example.com", Age: 29, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		var result map[string]interface{}
+		n, err := tbl.Select(&result, zorm.Where("id = ?", user.ID))
+		if err != nil {
+			t.Fatalf("select #%d failed: %v", i+1, err)
+		}
+		if n != 1 {
+			t.Fatalf("select #%d expected 1 row, got %d", i+1, n)
+		}
+		if gotID := toInt64(t, result["id"]); gotID != user.ID {
+			t.Fatalf("select #%d expected id %d, got %d", i+1, user.ID, gotID)
+		}
+		if gotName := fmt.Sprint(result["name"]); gotName != user.Name {
+			t.Fatalf("select #%d expected name %q, got %#v", i+1, user.Name, result["name"])
+		}
+		if gotEmail := fmt.Sprint(result["email"]); gotEmail != user.Email {
+			t.Fatalf("select #%d expected email %q, got %#v", i+1, user.Email, result["email"])
+		}
+	}
+}
+
+func TestSelectMapWildcardReuseSlice(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	users := []User{
+		{Name: "Map Wildcard Slice 1", Email: "mapwildcardslice1@example.com", Age: 21, CreatedAt: time.Now()},
+		{Name: "Map Wildcard Slice 2", Email: "mapwildcardslice2@example.com", Age: 22, CreatedAt: time.Now()},
+	}
+	for _, user := range users {
+		if _, err := tbl.Insert(&user); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		var results []map[string]interface{}
+		n, err := tbl.Select(
+			&results,
+			zorm.Where("email IN (?, ?)", users[0].Email, users[1].Email),
+			zorm.OrderBy("id asc"),
+		)
+		if err != nil {
+			t.Fatalf("select #%d failed: %v", i+1, err)
+		}
+		if n != 2 {
+			t.Fatalf("select #%d expected 2 rows, got %d", i+1, n)
+		}
+		if len(results) != 2 {
+			t.Fatalf("select #%d expected 2 result maps, got %d", i+1, len(results))
+		}
+		if got := fmt.Sprint(results[0]["name"]); got != users[0].Name {
+			t.Fatalf("select #%d expected first name %q, got %#v", i+1, users[0].Name, results[0]["name"])
+		}
+		if got := fmt.Sprint(results[1]["name"]); got != users[1].Name {
+			t.Fatalf("select #%d expected second name %q, got %#v", i+1, users[1].Name, results[1]["name"])
+		}
+	}
+}
+
+func TestReuseStructArgsWithEmbeddedStruct(t *testing.T) {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS test_embedded_reuse_args (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		name TEXT,
+		description TEXT
+	)`); err != nil {
+		t.Fatalf("create table failed: %v", err)
+	}
+	defer db.Exec("DELETE FROM test_embedded_reuse_args")
+
+	tbl := zorm.Table(db, "test_embedded_reuse_args").Reuse()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	first := Category{
+		BaseModel:   BaseModel{CreatedAt: now, UpdatedAt: now},
+		Name:        "Embedded Reuse 1",
+		Description: "Embedded Reuse Desc 1",
+	}
+	if _, err := tbl.Insert(&first); err != nil {
+		t.Fatalf("first insert failed: %v", err)
+	}
+
+	second := Category{
+		BaseModel:   BaseModel{CreatedAt: now, UpdatedAt: now},
+		Name:        "Embedded Reuse 2",
+		Description: "Embedded Reuse Desc 2",
+	}
+	if _, err := tbl.Insert(&second); err != nil {
+		t.Fatalf("second insert failed: %v", err)
+	}
+	if first.ID == 0 || second.ID == 0 {
+		t.Fatalf("expected auto increment ids, got first=%d second=%d", first.ID, second.ID)
+	}
+
+	update1 := Category{
+		BaseModel:   BaseModel{UpdatedAt: now.Add(time.Hour)},
+		Name:        "Embedded Reuse 2A",
+		Description: "Embedded Reuse Desc 2A",
+	}
+	if _, err := tbl.Update(&update1, zorm.Fields("updated_at", "name", "description"), zorm.Where("id = ?", second.ID)); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+
+	update2 := Category{
+		BaseModel:   BaseModel{UpdatedAt: now.Add(2 * time.Hour)},
+		Name:        "Embedded Reuse 2B",
+		Description: "Embedded Reuse Desc 2B",
+	}
+	if _, err := tbl.Update(&update2, zorm.Fields("updated_at", "name", "description"), zorm.Where("id = ?", second.ID)); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := tbl.Select(&result, zorm.Fields("id", "name", "description"), zorm.Where("id = ?", second.ID)); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if gotID := toInt64(t, result["id"]); gotID != second.ID {
+		t.Fatalf("expected id %d, got %d", second.ID, gotID)
+	}
+	if gotName := fmt.Sprint(result["name"]); gotName != update2.Name {
+		t.Fatalf("expected name %q, got %#v", update2.Name, result["name"])
+	}
+	if gotDescription := fmt.Sprint(result["description"]); gotDescription != update2.Description {
+		t.Fatalf("expected description %q, got %#v", update2.Description, result["description"])
+	}
+}
+
+func TestUpdateMapReuseSameShapeDifferentOrder(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Map Reuse Order", Email: "mapreuseorder@example.com", Age: 25, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	run := func(update zorm.V) error {
+		_, err := tbl.Update(update, zorm.Where("id = ?", user.ID))
+		return err
+	}
+
+	if err := run(zorm.V{"name": "Map Reuse Order 1", "age": 30}); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+	if err := run(zorm.V{"age": 31, "name": "Map Reuse Order 2"}); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := tbl.Select(&result, zorm.Fields("name", "age"), zorm.Where("id = ?", user.ID)); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if got := fmt.Sprint(result["name"]); got != "Map Reuse Order 2" {
+		t.Fatalf("expected updated name, got %#v", result["name"])
+	}
+	if got := toInt64(t, result["age"]); got != 31 {
+		t.Fatalf("expected updated age 31, got %d", got)
+	}
+}
+
+func TestUpdateMapReuseShapeChangesSameCallSite(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Map Reuse Shape", Email: "mapreuseshape@example.com", Age: 25, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	run := func(update zorm.V) error {
+		_, err := tbl.Update(update, zorm.Where("id = ?", user.ID))
+		return err
+	}
+
+	if err := run(zorm.V{"name": "Map Reuse Shape 1"}); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+	if err := run(zorm.V{"age": 33}); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := tbl.Select(&result, zorm.Fields("name", "age"), zorm.Where("id = ?", user.ID)); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if got := fmt.Sprint(result["name"]); got != "Map Reuse Shape 1" {
+		t.Fatalf("expected name to stay updated, got %#v", result["name"])
+	}
+	if got := toInt64(t, result["age"]); got != 33 {
+		t.Fatalf("expected updated age 33, got %d", got)
+	}
+}
+
+func TestUpdateMapReuseWithFieldsShapeChangesSameCallSite(t *testing.T) {
+	setupTestTables(t)
+	tbl := zorm.Table(db, "test_users").Reuse()
+
+	user := User{Name: "Map Reuse Fields Shape", Email: "mapreusefieldsshape@example.com", Age: 25, CreatedAt: time.Now()}
+	if _, err := tbl.Insert(&user); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	run := func(update zorm.V) error {
+		_, err := tbl.Update(update, zorm.Fields("name", "age"), zorm.Where("id = ?", user.ID))
+		return err
+	}
+
+	if err := run(zorm.V{"name": "Map Reuse Fields 1"}); err != nil {
+		t.Fatalf("first update failed: %v", err)
+	}
+	if err := run(zorm.V{"name": "Map Reuse Fields 2", "age": 34}); err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if _, err := tbl.Select(&result, zorm.Fields("name", "age"), zorm.Where("id = ?", user.ID)); err != nil {
+		t.Fatalf("select failed: %v", err)
+	}
+	if got := fmt.Sprint(result["name"]); got != "Map Reuse Fields 2" {
+		t.Fatalf("expected updated name, got %#v", result["name"])
+	}
+	if got := toInt64(t, result["age"]); got != 34 {
+		t.Fatalf("expected updated age 34, got %d", got)
+	}
 }
