@@ -89,7 +89,7 @@
 <table style="text-align: center">
    <tr>
       <td colspan="2">Library</td>
-      <td><a href="https://github.com/orca-zhang/zorm">zorm <strong>(me)</strong></a></td>
+      <td><a href="https://github.com/IceWhaleTech/zorm">zorm <strong>(me)</strong></a></td>
       <td><a href="https://github.com/jinzhu/gorm">gorm</a></td>
       <td><a href="https://github.com/go-xorm/xorm">xorm</a></td>
       <td>Notes</td>
