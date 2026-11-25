@@ -12,7 +12,7 @@
 
 # 📊 Performance Benchmarks
 
-Measured on 2026-11-25: Apple M4 Pro, macOS 26.6.2, Go 1.25.6, GOMAXPROCS=1. All six libraries use in-memory SQLite with one connection. ZORM uses this working tree, including the cache fixes and optimizations. Values use the median of five runs.
+Measured on 2026-11-25: Apple M4 Pro, macOS 26.6.2, Go 1.25.6, GOMAXPROCS=1. All six libraries use in-memory SQLite with one connection. ZORM uses commit `1573041`, including the cache fixes and optimizations. Values use the median of five runs.
 
 <table>
 <thead>
@@ -40,7 +40,7 @@ Measured on 2026-11-25: Apple M4 Pro, macOS 26.6.2, Go 1.25.6, GOMAXPROCS=1. All
 
 > **Time ratio**: Each operation’s fastest median is **1.00x**; lower is better. These are elapsed-time multiples, not throughput multipliers.
 
-Library versions, absolute timings, raw results, benchmark corrections, and reproduction commands are in the [ORM comparison report](benchmarks/2026-11-25-orm-comparison/README.md). Cache microbenchmarks and regression checks are in the [optimization and test report](benchmarks/2026-11-25-optimize/README.md).
+The [v1.0.0 release](https://github.com/IceWhaleTech/zorm/releases/tag/v1.0.0) includes a benchmark archive with library versions, absolute timings, raw results, benchmark corrections, and reproduction commands.
 
 # 🚀 Key Features
 
@@ -699,21 +699,22 @@ All operations are automatically monitored with telemetry data:
 
 ## 📚 Documentation
 
-- **[Current ORM Comparison](benchmarks/2026-11-25-orm-comparison/README.md)** - Six libraries, eight operations, five runs, and reproduction commands
-- **[Current Optimization and Test Report](benchmarks/2026-11-25-optimize/README.md)** - Cache fixes, regression tests, performance changes, and raw results
+- **[v1.0.0 Release Notes and Benchmark Archive](https://github.com/IceWhaleTech/zorm/releases/tag/v1.0.0)** - Cache fixes, dependency updates, version comparison, six-ORM results, and reproduction commands
 - **[Historical Performance Report (2025-09-28)](PERFORMANCE_REPORT.md)**
 
 # Performance Notes
+
+Compared with commit `72401e1`, five alternating runs of the current code (`1573041`) reduced four SQLite query timings by 27.7%–34.0%; struct Select went from 2,586 to 1,708 ns/op, with allocations from 36 to 22. Default Update overhead decreased 7.4%. Insert was approximately unchanged. Update with a new table per call used 26.1% fewer allocation bytes but took 2.9% longer. These results include the SQLite driver upgrade; full results and validation are in the [benchmark archive](https://github.com/IceWhaleTech/zorm/releases/tag/v1.0.0).
 
 SQL binding caches use separate instances for each database, table, model type, and configuration; Insert also separates insertion modes and batch lengths. Entries retain the existing call-site/SQL-shape key. Table objects remember their most recent instance, and each call site retains a hint for its first scope. Every hint validates the complete scope; mismatches use the shared registry.
 
 Field metadata is shared by actual Go model type and remains independent of table and database identity. Binding metadata is complete before publication and stays read-only on hits. Regression tests cover cross-table operations, changing batch sizes, model/configuration/database isolation, pointer-slice binding, concurrent updates, and reuse across newly created table objects.
 
-Five paired runs reduced Update with a new table per call from 404.4 to 357.3 ns/op (11.6%), and allocation bytes from 184 to 136 B/op (26.1%); the allocation count stayed at 5. Alternating between two table names reduced time from 406.3 to 393.6 ns/op. Both compared versions include the correctness fixes. The [optimization and test report](benchmarks/2026-11-25-optimize/README.md) contains all results, including workloads without a speedup.
+In the separate comparison against an intermediate version that already includes the correctness fixes, five paired runs reduced Update with a new table per call from 404.4 to 357.3 ns/op (11.6%), and allocation bytes from 184 to 136 B/op (26.1%); the allocation count stayed at 5. Alternating between two table names reduced time from 406.3 to 393.6 ns/op. Both compared versions include the correctness fixes. The [benchmark archive](https://github.com/IceWhaleTech/zorm/releases/tag/v1.0.0) contains all results, including workloads without a speedup.
 
-The earlier cache-line padding experiment is documented in the [pre-fix review](benchmarks/2026-11-25-review/README.md). Its candidate gains have not been measured again against the current code.
+Earlier cache-line padding candidates have not been measured again against the current code and are excluded from the release performance claims.
 
-Run benchmarks and regression tests using the commands in the [report](benchmarks/2026-11-25-optimize/README.md). Root-package tests delete `test.db` during initialization, so run them in a temporary copy.
+Run benchmarks and regression tests using the commands in the [benchmark archive](https://github.com/IceWhaleTech/zorm/releases/tag/v1.0.0). Root-package tests delete `test.db` during initialization, so run them in a temporary copy.
 
 ## Contributors
 
