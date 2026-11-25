@@ -68,7 +68,7 @@ type U string
 // Config .
 type Config struct {
 	Debug               bool
-	Reuse               bool // 默认开启，提供2-14倍性能提升
+	Reuse               bool // 默认开启 SQL 和元数据复用
 	UseNameWhenTagEmpty bool
 	ToTimestamp         bool
 }
@@ -651,6 +651,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 		item     *DataBindingItem
 		stmtArgs []interface{}
 		shapeKey string
+		cache    *dataBindingCache
 	)
 	origArgs := args
 
@@ -700,7 +701,8 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 	if t.Cfg.Reuse {
 		callSite := getCallSite()
 		shapeKey = buildShapeKey(callSite.Key, "Select", origArgs)
-		if i, ok := _dataBindingCache.Load(shapeKey); ok {
+		cache = t.getDataBindingCache(callSite, reflect.TypeOf(res), "", 0)
+		if i, ok := cache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
 	}
@@ -834,7 +836,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 
 		shouldCache := t.Cfg.Reuse && shapeKey != "" && !(rtElem.Kind() == reflect.Map && len(item.Fields) == 0)
 		if shouldCache {
-			_dataBindingCache.Store(shapeKey, item)
+			cache.Store(shapeKey, item)
 		}
 	}
 
@@ -876,7 +878,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 				}
 				item.Fields = append([]string(nil), columns...)
 				if t.Cfg.Reuse && shapeKey != "" {
-					_dataBindingCache.Store(shapeKey, item)
+					cache.Store(shapeKey, item)
 				}
 
 				binding := getMapScanBinding(len(item.Fields))
@@ -975,7 +977,7 @@ func (t *ZormTable) Select(res interface{}, args ...ZormItem) (int, error) {
 			}
 			item.Fields = append([]string(nil), columns...)
 			if t.Cfg.Reuse && shapeKey != "" {
-				_dataBindingCache.Store(shapeKey, item)
+				cache.Store(shapeKey, item)
 			}
 		}
 		mapBinding = getMapScanBinding(len(item.Fields))
@@ -1090,20 +1092,13 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		stmtArgs []interface{}
 		cols     []reflect2.StructField
 
-		item *DataBindingItem
+		item     *DataBindingItem
+		cache    *dataBindingCache
+		shapeKey string
 	)
 	origArgs := args
 	stmtArgs = getArgsSlice()
 	defer func() { putArgsSlice(stmtArgs) }()
-
-	// Reuse缓存检查
-	if t.Cfg.Reuse {
-		callSite := getCallSite()
-		shapeKey := buildShapeKey(callSite.Key, "Insert", origArgs)
-		if i, ok := _dataBindingCache.Load(shapeKey); ok {
-			item = i.(*DataBindingItem)
-		}
-	}
 
 	cacheRt := rt
 	cacheRtElem := cacheRt
@@ -1138,8 +1133,21 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		}
 	}
 
+	if t.Cfg.Reuse {
+		callSite := getCallSite()
+		shapeKey = buildShapeKey(callSite.Key, "Insert", origArgs)
+		rows := 0
+		if cacheIsArray {
+			rows = cacheRtSlice.(reflect2.SliceType).UnsafeLengthOf(reflect2.PtrOf(objs))
+		}
+		cache = t.getDataBindingCache(callSite, reflect.TypeOf(objs), prefix, rows)
+		if i, ok := cache.Load(shapeKey); ok {
+			item = i.(*DataBindingItem)
+		}
+	}
+
 	if item != nil && cacheRtElem.Kind() == reflect.Struct {
-		cols = dataBindingStructFields(item)
+		cols = item.SCols
 		if len(cols) == 0 {
 			item = nil
 		} else {
@@ -1150,17 +1158,16 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 			isPtrArray = cacheIsPtrArray
 
 			// 使用缓存的SQL和字段信息
-			argIndex := ensureStructArgIndexes(item, rtElem.(reflect2.StructType), cols)
 			// 构建参数
 			if isArray {
 				slice := rtSlice.(reflect2.SliceType)
 				length := slice.UnsafeLengthOf(reflect2.PtrOf(objs))
 				for i := 0; i < length; i++ {
 					ptr := slice.UnsafeGetIndex(reflect2.PtrOf(objs), i)
-					t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, rtElem, isPtrArray, ptr)
+					t.inputArgs(&stmtArgs, cols, item.ArgIndex, rtPtr, rtElem, isPtrArray, ptr)
 				}
 			} else {
-				t.inputArgs(&stmtArgs, cols, argIndex, nil, rtElem, false, reflect2.PtrOf(objs))
+				t.inputArgs(&stmtArgs, cols, item.ArgIndex, nil, rtElem, false, reflect2.PtrOf(objs))
 			}
 
 			// 处理额外的args
@@ -1463,7 +1470,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 		}
 		sbTmp.WriteString(")")
 
-		argIndex := ensureStructArgIndexes(item, s, cols)
+		item.ArgIndex = buildStructArgIndexes(s, cols)
 		// inputArgs objs
 		if isArray {
 			// 数组
@@ -1472,12 +1479,12 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 					sb.WriteString(",")
 				}
 				sb.WriteString(sbTmp.String())
-				t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, s, isPtrArray, rtSlice.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
+				t.inputArgs(&stmtArgs, cols, item.ArgIndex, rtPtr, s, isPtrArray, rtSlice.(reflect2.ListType).UnsafeGetIndex(reflect2.PtrOf(objs), i))
 			}
 			putSQLBuilder(sbTmp) // 释放临时构建器
 		} else {
 			// 普通元素
-			t.inputArgs(&stmtArgs, cols, argIndex, rtPtr, s, false, reflect2.PtrOf(objs))
+			t.inputArgs(&stmtArgs, cols, item.ArgIndex, rtPtr, s, false, reflect2.PtrOf(objs))
 		}
 
 		// on duplicate key update
@@ -1497,9 +1504,7 @@ func (t *ZormTable) insert(prefix string, objs interface{}, args []ZormItem) (in
 
 		// 存储到缓存
 		if t.Cfg.Reuse {
-			callSite := getCallSite()
-			shapeKey := buildShapeKey(callSite.Key, "Insert", origArgs)
-			_dataBindingCache.Store(shapeKey, item)
+			cache.Store(shapeKey, item)
 		}
 	}
 
@@ -1639,6 +1644,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		stmtArgs       []interface{}
 		item           *DataBindingItem
 		shapeKey       string
+		cache          *dataBindingCache
 		mapUpdateSpecs []mapUpdateFieldSpec
 	)
 	origArgs := args
@@ -1657,7 +1663,8 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 		if len(mapUpdateSpecs) > 0 {
 			shapeKey = appendMapUpdateShapeKey(shapeKey, mapUpdateSpecs)
 		}
-		if i, ok := _dataBindingCache.Load(shapeKey); ok {
+		cache = t.getDataBindingCache(callSite, reflect.TypeOf(obj), "", 0)
+		if i, ok := cache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
 	}
@@ -1695,16 +1702,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 			}
 			if rt.Kind() == reflect.Struct {
 				s := rt.(reflect2.StructType)
-				cols := item.SCols
-				if len(cols) == 0 && len(item.Cols) > 0 {
-					cols = make([]reflect2.StructField, len(item.Cols))
-					for i, f := range item.Cols {
-						cols[i] = f.(reflect2.StructField)
-					}
-					item.SCols = cols
-				}
-				argIndex := ensureStructArgIndexes(item, s, cols)
-				t.inputArgs(&stmtArgs, cols, argIndex, nil, s, false, reflect2.PtrOf(objPtr))
+				t.inputArgs(&stmtArgs, item.SCols, item.ArgIndex, nil, s, false, reflect2.PtrOf(objPtr))
 			} else {
 				return 0, errors.New("non-structure type not supported yet")
 			}
@@ -1780,8 +1778,8 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						item.SCols = append(item.SCols, f)
 					}
 					item.Fields = fields
-					argIndex := ensureStructArgIndexes(item, s, item.SCols)
-					t.inputArgs(&stmtArgs, item.SCols, argIndex, nil, s, false, reflect2.PtrOf(objPtr))
+					item.ArgIndex = buildStructArgIndexes(s, item.SCols)
+					t.inputArgs(&stmtArgs, item.SCols, item.ArgIndex, nil, s, false, reflect2.PtrOf(objPtr))
 					args = args[1:]
 				} else {
 					// 如果没有 Fields，更新所有字段（除了被忽略的）
@@ -1849,6 +1847,9 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 						}
 						idx++
 					}
+					if t.Cfg.Reuse {
+						item.ArgIndex = buildStructArgIndexes(s, item.SCols)
+					}
 				}
 			} else {
 				return 0, errors.New("non-structure type not supported yet")
@@ -1887,7 +1888,7 @@ func (t *ZormTable) Update(obj interface{}, args ...ZormItem) (int, error) {
 
 		// 存储到缓存
 		if t.Cfg.Reuse && shapeKey != "" {
-			_dataBindingCache.Store(shapeKey, item)
+			cache.Store(shapeKey, item)
 		}
 	}
 
@@ -1920,6 +1921,8 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 	var (
 		stmtArgs []interface{}
 		item     *DataBindingItem
+		cache    *dataBindingCache
+		shapeKey string
 	)
 
 	// 使用池化的参数切片
@@ -1929,8 +1932,9 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 	// Reuse缓存检查
 	if t.Cfg.Reuse {
 		callSite := getCallSite()
-		shapeKey := buildShapeKey(callSite.Key, "Delete", args)
-		if i, ok := _dataBindingCache.Load(shapeKey); ok {
+		shapeKey = buildShapeKey(callSite.Key, "Delete", args)
+		cache = t.getDataBindingCache(callSite, nil, "", 0)
+		if i, ok := cache.Load(shapeKey); ok {
 			item = i.(*DataBindingItem)
 		}
 	}
@@ -1981,9 +1985,7 @@ func (t *ZormTable) Delete(args ...ZormItem) (int, error) {
 
 		// 存储到缓存
 		if t.Cfg.Reuse {
-			callSite := getCallSite()
-			shapeKey := buildShapeKey(callSite.Key, "Delete", args)
-			_dataBindingCache.Store(shapeKey, item)
+			cache.Store(shapeKey, item)
 		}
 	}
 
@@ -2044,8 +2046,8 @@ func (t *ZormTable) inputArgs(stmtArgs *[]interface{}, cols []reflect2.StructFie
 			}
 			return
 		}
-		// 现在 ptrVal 是 *User，使用 rtPtr 来 PackEFace 获取 *User 的值
-		structPtr := rtPtr.PackEFace(ptrVal)
+		// rtPtr 是 *User 类型，PackEFace 需要切片元素的 **User 地址。
+		structPtr := rtPtr.PackEFace(x)
 		rv = reflect.ValueOf(structPtr)
 		// 确保 rv 不是指针，如果是则解引用
 		for rv.Kind() == reflect.Ptr {
@@ -2300,8 +2302,7 @@ type ZormTable struct {
 	Cfg  Config
 	ctx  context.Context
 
-	// 结构体字段缓存，避免重复反射解析
-	structFieldCache sync.Map
+	lastBindingCache atomic.Pointer[dataBindingCache]
 }
 
 type structFieldMeta struct {
@@ -2414,15 +2415,15 @@ func setReflectMapValue(mapVal reflect.Value, field string, raw interface{}) {
 }
 
 func (t *ZormTable) getStructFieldSet(s reflect2.StructType) *structFieldSet {
-	typeKey := s.String()
-	if cached, ok := t.structFieldCache.Load(typeKey); ok {
+	typeKey := s.Type1()
+	if cached, ok := _structFieldCache.Load(typeKey); ok {
 		return cached.(*structFieldSet)
 	}
 
 	set := &structFieldSet{FieldMap: make(map[string]reflect2.StructField)}
 	t.collectStructFieldSet(s, set)
 	set.DefaultSQL = buildFieldsSQL(setFieldNames(set.Ordered))
-	t.structFieldCache.Store(typeKey, set)
+	_structFieldCache.Store(typeKey, set)
 	return set
 }
 
@@ -3864,35 +3865,9 @@ func buildStringAnyMap(fields []string, values []interface{}) map[string]interfa
 	return m
 }
 
-func dataBindingStructFields(item *DataBindingItem) []reflect2.StructField {
-	if item == nil {
+func buildStructArgIndexes(s reflect2.StructType, cols []reflect2.StructField) [][]int {
+	if len(cols) == 0 {
 		return nil
-	}
-	if len(item.SCols) > 0 {
-		return item.SCols
-	}
-	if len(item.Cols) == 0 {
-		return nil
-	}
-
-	cols := make([]reflect2.StructField, 0, len(item.Cols))
-	for _, col := range item.Cols {
-		field, ok := col.(reflect2.StructField)
-		if !ok {
-			return nil
-		}
-		cols = append(cols, field)
-	}
-	item.SCols = cols
-	return cols
-}
-
-func ensureStructArgIndexes(item *DataBindingItem, s reflect2.StructType, cols []reflect2.StructField) [][]int {
-	if item == nil || len(cols) == 0 {
-		return nil
-	}
-	if len(item.ArgIndex) == len(cols) {
-		return item.ArgIndex
 	}
 
 	rt := s.Type1()
@@ -3910,11 +3885,51 @@ func ensureStructArgIndexes(item *DataBindingItem, s reflect2.StructType, cols [
 		copy(index, field.Index)
 		indexes[i] = index
 	}
-	item.ArgIndex = indexes
 	return indexes
 }
 
-var _dataBindingCache sync.Map
+type dataBindingCacheScope struct {
+	Table  string
+	Model  reflect.Type
+	DB     interface{}
+	Config Config
+	Mode   string
+	Rows   int
+}
+
+type dataBindingCache struct {
+	sync.Map
+	scope dataBindingCacheScope
+}
+
+func (t *ZormTable) getDataBindingCache(callSite *cachedCallSite, model reflect.Type, mode string, rows int) *dataBindingCache {
+	scope := dataBindingCacheScope{Table: t.Name, Model: model, DB: t.DB, Config: t.Cfg, Mode: mode, Rows: rows}
+	// Cached scopes contain comparable DB identities, so comparing a raw DB value is safe.
+	if cache := t.lastBindingCache.Load(); cache != nil && cache.scope == scope {
+		return cache
+	}
+	hint := callSite.bindingCache.Load()
+	if hint != nil && hint.scope == scope {
+		t.lastBindingCache.Store(hint)
+		return hint
+	}
+	if _, ok := stmtCacheWrapperKey(t.DB); !ok {
+		scope.DB = t
+	}
+	cached, ok := _dataBindingCaches.Load(scope)
+	if !ok {
+		cached, _ = _dataBindingCaches.LoadOrStore(scope, &dataBindingCache{scope: scope})
+	}
+	cache := cached.(*dataBindingCache)
+	t.lastBindingCache.Store(cache)
+	// Pin the first scope so mixed-scope callers do not keep rewriting a shared hint.
+	if hint == nil {
+		callSite.bindingCache.CompareAndSwap(nil, cache)
+	}
+	return cache
+}
+
+var _dataBindingCaches sync.Map
 
 /*
 Mock相关
@@ -4058,16 +4073,16 @@ func buildCacheKey(file string, line int) string {
 	return key
 }
 
-func getCallSite() *CallSite {
+func getCallSite() *cachedCallSite {
 	var direct [1]uintptr
 	if n := runtime.Callers(3, direct[:]); n == 1 && direct[0] != 0 {
 		callerPC := direct[0] - 1
 		if cached, ok := _callSiteCache.Load(callerPC); ok {
-			return cached.(*CallSite)
+			return cached.(*cachedCallSite)
 		}
 		if fn := runtime.FuncForPC(callerPC); fn != nil && !strings.HasPrefix(fn.Name(), zormPackagePrefix) {
 			file, line := fn.FileLine(callerPC)
-			callSite := &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
+			callSite := &cachedCallSite{CallSite: CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}}
 			_callSiteCache.Store(callerPC, callSite)
 			return callSite
 		}
@@ -4081,26 +4096,26 @@ func getCallSite() *CallSite {
 		}
 		callerPC := pcs[i] - 1
 		if cached, ok := _callSiteCache.Load(callerPC); ok {
-			return cached.(*CallSite)
+			return cached.(*cachedCallSite)
 		}
 		fn := runtime.FuncForPC(callerPC)
 		if fn == nil || strings.HasPrefix(fn.Name(), zormPackagePrefix) {
 			continue
 		}
 		file, line := fn.FileLine(callerPC)
-		callSite := &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
+		callSite := &cachedCallSite{CallSite: CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}}
 		_callSiteCache.Store(callerPC, callSite)
 		return callSite
 	}
 
 	_, file, line, _ := runtime.Caller(1)
-	return &CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}
+	return &cachedCallSite{CallSite: CallSite{File: file, Line: line, Key: buildCacheKey(file, line)}}
 }
 
 var (
 	mapStringAnyType  = reflect.TypeOf(map[string]interface{}{})
 	zormPackagePrefix = reflect.TypeOf(ZormTable{}).PkgPath() + "."
-	_callSiteCache    sync.Map // map[uintptr]*CallSite
+	_callSiteCache    sync.Map // map[uintptr]*cachedCallSite
 	_cacheKeyPool     = sync.Pool{
 		New: func() interface{} {
 			return &strings.Builder{}
@@ -4135,12 +4150,18 @@ var (
 	}
 	_shapeKeyStringCache   sync.Map
 	_stmtCacheWrapperCache sync.Map
+	_structFieldCache      sync.Map // Field metadata depends only on the model type.
 )
 
 type CallSite struct {
 	File string
 	Line int
 	Key  string
+}
+
+type cachedCallSite struct {
+	CallSite
+	bindingCache atomic.Pointer[dataBindingCache]
 }
 
 // getSQLBuilder 从池中获取字符串构建器

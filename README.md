@@ -10,7 +10,9 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-# 📊 [Performance Benchmark](https://github.com/benchplus/goorm)
+# 📊 Performance Benchmarks
+
+Measured on 2026-11-25: Apple M4 Pro, macOS 26.6.2, Go 1.25.6, GOMAXPROCS=1. All six libraries use in-memory SQLite with one connection. ZORM uses this working tree, including the cache fixes and optimizations. Values use the median of five runs.
 
 <table>
 <thead>
@@ -25,24 +27,26 @@
 </tr>
 </thead>
 <tbody>
-<tr><td>InsertSingle</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 3.13x</td><td style="background-color: #FFA500;">🟠 3.46x</td><td style="background-color: #FF6347;">🔴 7.09x</td><td style="background-color: #FF6347;">🔴 60.61x</td><td style="background-color: #FF6347;">🔴 61.12x</td></tr>
-<tr><td>InsertBatch</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.30x</td><td style="background-color: #FFA500;">🟠 2.50x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFA500;">🟠 3.57x</td><td style="background-color: #FFA500;">🟠 3.33x</td></tr>
-<tr><td>GetByID</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.52x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.90x</td><td style="background-color: #FFA500;">🟠 2x</td><td style="background-color: #FFA500;">🟠 3.12x</td></tr>
-<tr><td>GetByIDs</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.38x</td><td style="background-color: #FFC107;">🟡 1.39x</td><td style="background-color: #FFC107;">🟡 1.36x</td><td style="background-color: #FFC107;">🟡 1.98x</td></tr>
-<tr><td>Update</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.67x</td><td style="background-color: #FF6347;">🔴 9.86x</td><td style="background-color: #FF6347;">🔴 7.06x</td><td style="background-color: #FF6347;">🔴 82.52x</td><td style="background-color: #FF6347;">🔴 84x</td></tr>
-<tr><td>Delete</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.31x</td><td style="background-color: #FFA500;">🟠 2.62x</td><td style="background-color: #FF6347;">🔴 6.40x</td><td style="background-color: #FF6347;">🔴 105.84x</td><td style="background-color: #FF6347;">🔴 101.85x</td></tr>
-<tr><td>Count</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.15x</td><td style="background-color: #FF6347;">🔴 13.40x</td><td style="background-color: #FFA500;">🟠 2.99x</td><td style="background-color: #FFA500;">🟠 4.34x</td><td style="background-color: #FF6347;">🔴 5.95x</td></tr>
-<tr><td>GetAll</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.14x</td><td style="background-color: #FFC107;">🟡 1.21x</td><td style="background-color: #FFC107;">🟡 1.43x</td><td style="background-color: #FFC107;">🟡 1.18x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+<tr><td>InsertSingle</td><td style="background-color: #FFC107;">🟡 1.03x</td><td style="background-color: #FFA500;">🟠 2.22x</td><td style="background-color: #FFA500;">🟠 2.41x</td><td style="background-color: #FFA500;">🟠 3.99x</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.55x</td></tr>
+<tr><td>InsertBatch</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.61x</td><td style="background-color: #FFA500;">🟠 2.82x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFC107;">🟡 1.57x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+<tr><td>GetByID</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFA500;">🟠 2.54x</td><td style="background-color: #FFA500;">🟠 3.05x</td><td style="background-color: #FFA500;">🟠 3.28x</td><td style="background-color: #FFC107;">🟡 1.79x</td><td style="background-color: #FFA500;">🟠 3.85x</td></tr>
+<tr><td>GetByIDs</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.48x</td><td style="background-color: #FFC107;">🟡 1.71x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.34x</td><td style="background-color: #FFA500;">🟠 2.36x</td></tr>
+<tr><td>Update</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.71x</td><td style="background-color: #FF6347;">🔴 5.73x</td><td style="background-color: #FFA500;">🟠 4.63x</td><td style="background-color: #FFC107;">🟡 1.26x</td><td style="background-color: #FFA500;">🟠 2.78x</td></tr>
+<tr><td>Delete</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.62x</td><td style="background-color: #FFC107;">🟡 1.87x</td><td style="background-color: #FFA500;">🟠 4.51x</td><td style="background-color: #FFC107;">🟡 1.16x</td><td style="background-color: #FFA500;">🟠 2.66x</td></tr>
+<tr><td>Count</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.67x</td><td style="background-color: #FF6347;">🔴 8.58x</td><td style="background-color: #FFA500;">🟠 2.32x</td><td style="background-color: #FFC107;">🟡 1.37x</td><td style="background-color: #FFA500;">🟠 2.54x</td></tr>
+<tr><td>GetAll</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.09x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.47x</td><td style="background-color: #FFC107;">🟡 1.07x</td><td style="background-color: #FFA500;">🟠 2.18x</td></tr>
 </tbody>
 </table>
 
-> **Performance Ratio**: Numbers represent performance multiplier relative to the fastest ORM (lower is better)
+> **Time ratio**: Each operation’s fastest median is **1.00x**; lower is better. These are elapsed-time multiples, not throughput multipliers.
+
+Library versions, absolute timings, raw results, benchmark corrections, and reproduction commands are in the [ORM comparison report](benchmarks/2026-11-25-orm-comparison/README.md). Cache microbenchmarks and regression checks are in the [optimization and test report](benchmarks/2026-11-25-optimize/README.md).
 
 # 🚀 Key Features
 
 ## ⚡ High Performance
-- **8.6x Performance Improvement**: Smart caching with zero allocation design
-- **Reuse Enabled by Default**: Automatic SQL and metadata reuse for repeated operations
+- **Measured ORM Performance**: The table above compares eight operations across six libraries; raw timings and allocations are available in the report
+- **Reuse Enabled by Default**: SQL and metadata caching with regression tests for cache isolation and concurrency
 - **Connection Pool Management**: Configurable pool with optimal defaults for high concurrency
 - **Read-Write Separation**: Automatic routing of read/write operations for better performance
 
@@ -162,11 +166,11 @@
    </tr>
    <tr>
       <td rowspan="3">Performance</td>
-      <td>Compared to native time</td>
-      <td><=1x</td>
-      <td>2~3x</td>
-      <td>2~3x</td>
-      <td>xorm using prepare mode will be 2~3x slower</td>
+      <td>Measured performance</td>
+      <td>See benchmarks above</td>
+      <td>—</td>
+      <td>—</td>
+      <td>Results depend on the driver, workload, and concurrency</td>
    </tr>
    <tr>
       <td>Reflection</td>
@@ -180,7 +184,7 @@
       <td>:rocket:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
-      <td>8.6x performance improvement, zero allocation design, smart call-site caching</td>
+      <td>SQL and metadata caching; see the measured results and regression tests</td>
    </tr>
 </table>
 
@@ -201,7 +205,7 @@
 - `d.DB` is a database connection object that supports Exec/Query/QueryRow
 - `t_usr` can be a table name or nested query statement
 - `ctx` is the Context object to pass, defaults to context.Background() if not provided
-- **Reuse functionality is enabled by default**, providing 2-14x performance improvement, no additional configuration needed
+- **Reuse functionality is enabled by default**; use `NoReuse()` to disable SQL and metadata caching
 
 3. (Optional) Define model object
    ``` golang
@@ -495,8 +499,8 @@
 | Option      | Description                                                                                                                         |
 |-------------|-------------------------------------------------------------------------------------------------------------------------------------|
 | Debug       | Print SQL statements                                                                                                                |
-| Reuse       | Reuse SQL and storage based on call location (**enabled by default**, 2-14x improvement). Shape-aware multi-shape cache is built-in |
-| NoReuse     | Disable Reuse functionality (not recommended, will reduce performance)                                                              |
+| Reuse       | Cache SQL and metadata by call location, database, table, model, configuration, and argument shape (**enabled by default**) |
+| NoReuse     | Disable SQL and metadata reuse                                                              |
 | ToTimestamp | Use timestamp for Insert, not formatted string                                                                                      |
 | Audit       | Enable SQL audit logging and performance monitoring                                                                                 |
 
@@ -507,7 +511,7 @@ Option usage example:
    n, err = t.ToTimestamp().Insert(&o)
 
    // Reuse functionality is enabled by default, no manual call needed
-   // If you need to disable it (not recommended), you can call:
+   // To disable SQL and metadata reuse, call:
    n, err = t.NoReuse().Insert(&o)
 
    // Enable audit with chain-style method
@@ -695,32 +699,21 @@ All operations are automatically monitored with telemetry data:
 
 ## 📚 Documentation
 
-- **[Performance Report](PERFORMANCE_REPORT.md)** - Detailed performance benchmarks and optimization analysis
+- **[Current ORM Comparison](benchmarks/2026-11-25-orm-comparison/README.md)** - Six libraries, eight operations, five runs, and reproduction commands
+- **[Current Optimization and Test Report](benchmarks/2026-11-25-optimize/README.md)** - Cache fixes, regression tests, performance changes, and raw results
+- **[Historical Performance Report (2025-09-28)](PERFORMANCE_REPORT.md)**
 
-# Performance Test Results
+# Performance Notes
 
-- **8.6x Performance Improvement**: Smart caching with zero allocation design
-- **Memory Optimization**: 92% memory usage reduction, 75% allocation count reduction
-- **Concurrent Safe**: Optimized for high concurrency scenarios with `sync.Map`
+SQL binding caches use separate instances for each database, table, model type, and configuration; Insert also separates insertion modes and batch lengths. Entries retain the existing call-site/SQL-shape key. Table objects remember their most recent instance, and each call site retains a hint for its first scope. Every hint validates the complete scope; mismatches use the shared registry.
 
-## Reuse Function Performance Optimization
-- **Benchmark Results**:
-  - Single thread: 8.6x performance improvement
-  - Concurrent scenarios: Up to 14.2x performance improvement
-  - Memory optimization: 92% memory usage reduction
-  - Allocation optimization: 75% allocation count reduction
+Field metadata is shared by actual Go model type and remains independent of table and database identity. Binding metadata is complete before publication and stays read-only on hits. Regression tests cover cross-table operations, changing batch sizes, model/configuration/database isolation, pointer-slice binding, concurrent updates, and reuse across newly created table objects.
 
-- **Technical Implementation**:
-  - Call site caching: Use `runtime.Caller` to cache file line numbers
-  - String pooling: `sync.Pool` reuses `strings.Builder`
-  - Zero allocation design: Avoid redundant string building and memory allocation
-  - Concurrent safe: `sync.Map` supports high concurrency access
+Five paired runs reduced Update with a new table per call from 404.4 to 357.3 ns/op (11.6%), and allocation bytes from 184 to 136 B/op (26.1%); the allocation count stayed at 5. Alternating between two table names reduced time from 406.3 to 393.6 ns/op. Both compared versions include the correctness fixes. The [optimization and test report](benchmarks/2026-11-25-optimize/README.md) contains all results, including workloads without a speedup.
 
-- **Performance Data**:
-  ```
-  BenchmarkReuseOptimized-8    	 1000000	      1200 ns/op	     128 B/op	       2 allocs/op
-  BenchmarkReuseOriginal-8     	  100000	     10320 ns/op	    1600 B/op	      15 allocs/op
-  ```
+The earlier cache-line padding experiment is documented in the [pre-fix review](benchmarks/2026-11-25-review/README.md). Its candidate gains have not been measured again against the current code.
+
+Run benchmarks and regression tests using the commands in the [report](benchmarks/2026-11-25-optimize/README.md). Root-package tests delete `test.db` during initialization, so run them in a temporary copy.
 
 ## Contributors
 

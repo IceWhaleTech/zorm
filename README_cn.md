@@ -10,12 +10,14 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-# 📊 [性能基准测试](https://github.com/benchplus/goorm)
+# 📊 性能基准测试
+
+测试日期为 2026-11-25，环境为 Apple M4 Pro、macOS 26.6.2、Go 1.25.6、GOMAXPROCS=1。六个库均使用 SQLite 内存数据库和单连接；ZORM 使用包含缓存修复及优化的当前工作区代码。数据取五轮耗时中位数。
 
 <table>
 <thead>
 <tr>
-<th>测试用例</th>
+<th>测试项目</th>
 <th><a href="https://github.com/IceWhaleTech/zorm"><strong>ZORM</strong></a></th>
 <th><a href="https://bun.uptrace.dev/"><strong>BUN</strong></a></th>
 <th><a href="https://github.com/ent/ent"><strong>ENT</strong></a></th>
@@ -25,24 +27,26 @@
 </tr>
 </thead>
 <tbody>
-<tr><td>单条插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 3.13x</td><td style="background-color: #FFA500;">🟠 3.46x</td><td style="background-color: #FF6347;">🔴 7.09x</td><td style="background-color: #FF6347;">🔴 60.61x</td><td style="background-color: #FF6347;">🔴 61.12x</td></tr>
-<tr><td>批量插入</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.30x</td><td style="background-color: #FFA500;">🟠 2.50x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFA500;">🟠 3.57x</td><td style="background-color: #FFA500;">🟠 3.33x</td></tr>
-<tr><td>按ID查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.52x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.90x</td><td style="background-color: #FFA500;">🟠 2x</td><td style="background-color: #FFA500;">🟠 3.12x</td></tr>
-<tr><td>按IDs查询</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.38x</td><td style="background-color: #FFC107;">🟡 1.39x</td><td style="background-color: #FFC107;">🟡 1.36x</td><td style="background-color: #FFC107;">🟡 1.98x</td></tr>
-<tr><td>更新</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.67x</td><td style="background-color: #FF6347;">🔴 9.86x</td><td style="background-color: #FF6347;">🔴 7.06x</td><td style="background-color: #FF6347;">🔴 82.52x</td><td style="background-color: #FF6347;">🔴 84x</td></tr>
-<tr><td>删除</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.31x</td><td style="background-color: #FFA500;">🟠 2.62x</td><td style="background-color: #FF6347;">🔴 6.40x</td><td style="background-color: #FF6347;">🔴 105.84x</td><td style="background-color: #FF6347;">🔴 101.85x</td></tr>
-<tr><td>计数</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFA500;">🟠 2.15x</td><td style="background-color: #FF6347;">🔴 13.40x</td><td style="background-color: #FFA500;">🟠 2.99x</td><td style="background-color: #FFA500;">🟠 4.34x</td><td style="background-color: #FF6347;">🔴 5.95x</td></tr>
-<tr><td>查询全部</td><td style="background-color: #4CAF50;">🟢 1x</td><td style="background-color: #FFC107;">🟡 1.14x</td><td style="background-color: #FFC107;">🟡 1.21x</td><td style="background-color: #FFC107;">🟡 1.43x</td><td style="background-color: #FFC107;">🟡 1.18x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+<tr><td>InsertSingle</td><td style="background-color: #FFC107;">🟡 1.03x</td><td style="background-color: #FFA500;">🟠 2.22x</td><td style="background-color: #FFA500;">🟠 2.41x</td><td style="background-color: #FFA500;">🟠 3.99x</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.55x</td></tr>
+<tr><td>InsertBatch</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.61x</td><td style="background-color: #FFA500;">🟠 2.82x</td><td style="background-color: #FFC107;">🟡 1.89x</td><td style="background-color: #FFC107;">🟡 1.57x</td><td style="background-color: #FFC107;">🟡 1.91x</td></tr>
+<tr><td>GetByID</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFA500;">🟠 2.54x</td><td style="background-color: #FFA500;">🟠 3.05x</td><td style="background-color: #FFA500;">🟠 3.28x</td><td style="background-color: #FFC107;">🟡 1.79x</td><td style="background-color: #FFA500;">🟠 3.85x</td></tr>
+<tr><td>GetByIDs</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.48x</td><td style="background-color: #FFC107;">🟡 1.71x</td><td style="background-color: #FFC107;">🟡 1.85x</td><td style="background-color: #FFC107;">🟡 1.34x</td><td style="background-color: #FFA500;">🟠 2.36x</td></tr>
+<tr><td>Update</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.71x</td><td style="background-color: #FF6347;">🔴 5.73x</td><td style="background-color: #FFA500;">🟠 4.63x</td><td style="background-color: #FFC107;">🟡 1.26x</td><td style="background-color: #FFA500;">🟠 2.78x</td></tr>
+<tr><td>Delete</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.62x</td><td style="background-color: #FFC107;">🟡 1.87x</td><td style="background-color: #FFA500;">🟠 4.51x</td><td style="background-color: #FFC107;">🟡 1.16x</td><td style="background-color: #FFA500;">🟠 2.66x</td></tr>
+<tr><td>Count</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.67x</td><td style="background-color: #FF6347;">🔴 8.58x</td><td style="background-color: #FFA500;">🟠 2.32x</td><td style="background-color: #FFC107;">🟡 1.37x</td><td style="background-color: #FFA500;">🟠 2.54x</td></tr>
+<tr><td>GetAll</td><td style="background-color: #4CAF50;">🟢 1.00x</td><td style="background-color: #FFC107;">🟡 1.09x</td><td style="background-color: #FFC107;">🟡 1.17x</td><td style="background-color: #FFC107;">🟡 1.47x</td><td style="background-color: #FFC107;">🟡 1.07x</td><td style="background-color: #FFA500;">🟠 2.18x</td></tr>
 </tbody>
 </table>
 
-> **性能倍数**：数值表示相对于最快 ORM 的性能倍数（数值越小越好）
+> **耗时倍数**：每项最快的耗时中位数为 **1.00x**，数值越小越好；这里表示耗时比例。
+
+各库版本、绝对耗时、原始输出、基准修正与复测命令见 [ORM 对比报告](benchmarks/2026-11-25-orm-comparison/README.md)；缓存微基准与回归验证见[优化与验证报告](benchmarks/2026-11-25-optimize/README.md)。
 
 # 🚀 核心特性
 
 ## ⚡ 高性能
-- **8.6倍性能提升**：智能缓存与零分配设计
-- **默认开启重用**：自动复用SQL和元数据，提升重复操作性能
+- **实测 ORM 性能**：上表对比六个库的八项操作，报告提供原始耗时及分配数据
+- **默认开启重用**：缓存 SQL 和元数据，回归测试覆盖缓存隔离与并发调用
 - **连接池管理**：可配置连接池，为高并发场景提供最优默认值
 - **读写分离**：自动路由读写操作，提升整体性能
 
@@ -161,11 +165,11 @@
    </tr>
    <tr>
       <td rowspan="3">性能</td>
-      <td>较原生耗时</td>
-      <td><=1x</td>
-      <td>2~3x</td>
-      <td>2~3x</td>
-      <td>xorm使用prepare模式会再慢2～3x</td>
+      <td>实测性能</td>
+      <td>见上方基准结果</td>
+      <td>—</td>
+      <td>—</td>
+      <td>结果取决于驱动、负载和并发度</td>
    </tr>
    <tr>
       <td>反射</td>
@@ -179,7 +183,7 @@
       <td>:rocket:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
-      <td>8.6x性能提升，零分配设计，调用位置智能缓存</td>
+      <td>缓存 SQL 和元数据；实测数据与回归测试见性能章节</td>
    </tr>
 </table>
 
@@ -200,7 +204,7 @@
 - `d.DB`是支持Exec/Query/QueryRow的数据库连接对象
 - `t_usr`可以是表名，或者是嵌套查询语句
 - `ctx`是需要传递的Context对象，默认不传为context.Background()
-- **重用功能默认开启**，提供2-14倍性能提升，无需额外配置
+- **重用功能默认开启**，可通过 `NoReuse()` 关闭 SQL 和元数据缓存
 
 3. （可选）定义model对象
    ``` golang
@@ -482,8 +486,8 @@
 |选项|说明|
 |-|-|
 |Debug|打印sql语句|
-|Reuse|根据调用位置复用sql和存储方式（**默认开启**，提供2-14倍性能提升）。内建形状感知与多形状缓存|
-|NoReuse|关闭Reuse功能（不推荐，会降低性能）|
+|Reuse|根据调用位置、数据库、表、模型、配置和参数形状缓存 SQL 及元数据（**默认开启**）|
+|NoReuse|关闭 SQL 和元数据重用|
 |ToTimestamp|调用Insert时，使用时间戳，而非格式化字符串|
 |Audit|启用SQL审计日志和性能监控|
 
@@ -494,7 +498,7 @@
    n, err = t.ToTimestamp().Insert(&o)
    
    // Reuse功能默认开启，无需手动调用
-   // 如需关闭（不推荐），可调用：
+   // 如需关闭 SQL 和元数据重用，可调用：
    n, err = t.NoReuse().Insert(&o)
 
    // 启用审计日志
@@ -692,28 +696,21 @@ err := ddlManager.CreateTables(ctx, &User{}, &Product{}, &Order{})
 
 ## 📚 文档
 
-- **[性能报告](PERFORMANCE_REPORT_cn.md)** - 详细的性能基准测试和优化分析
+- **[当前 ORM 对比](benchmarks/2026-11-25-orm-comparison/README.md)** - 六个库、八项操作、五轮实测与复测命令
+- **[当前优化与验证报告](benchmarks/2026-11-25-optimize/README.md)** - 缓存修复、回归测试、性能变化及原始输出
+- **[历史性能报告（2025-09-28）](PERFORMANCE_REPORT_cn.md)**
 
-# 性能测试结果
+# 性能说明
 
-## 重用功能性能优化
-- **基准测试结果**:
-  - 单线程: 8.6x 性能提升
-  - 并发场景: 最高14.2x 性能提升
-  - 内存优化: 92% 内存使用减少
-  - 分配优化: 75% 分配次数减少
+SQL 绑定缓存按数据库、表、模型类型和配置选择独立实例，Insert 还区分插入方式及批量长度。实例内沿用原有的调用点与 SQL 形状 key。表对象记住最近实例，调用点保留首个作用域的实例提示；每次使用均校验完整作用域，不匹配则回退到共享注册表。
 
-- **技术实现**:
-  - 调用位置缓存: 使用`runtime.Caller`缓存文件行号
-  - 字符串池化: `sync.Pool`复用`strings.Builder`
-  - 零分配设计: 避免重复的字符串构建和内存分配
-  - 并发安全: `sync.Map`支持高并发访问
+字段元数据按实际 Go 模型类型共享，不依赖表或数据库身份。绑定元数据在发布前构建完成，命中路径只读。回归测试覆盖跨表操作、变长批量插入、模型/配置/数据库隔离、指针切片绑定、并发更新及新建表对象间的复用。
 
-- **性能数据**:
-  ```
-  BenchmarkReuseOptimized-8    	 1000000	      1200 ns/op	     128 B/op	       2 allocs/op
-  BenchmarkReuseOriginal-8     	  100000	     10320 ns/op	    1600 B/op	      15 allocs/op
-  ```
+五轮交替对照中，每次新建表对象的 Update 从 404.4 降至 357.3 ns/op（耗时下降 11.6%），分配字节从 184 降至 136 B/op（下降 26.1%），分配次数保持 5 次。交替更新两张表从 406.3 降至 393.6 ns/op。两组代码均包含正确性修复；完整数据及未获得加速的场景见[优化与验证报告](benchmarks/2026-11-25-optimize/README.md)。
+
+此前缓存行填充的试验见[修复前检查报告](benchmarks/2026-11-25-review/README.md)，其候选收益尚未针对当前代码重新测量。
+
+基准及回归测试命令见[优化与验证报告](benchmarks/2026-11-25-optimize/README.md)。根包测试初始化会删除 `test.db`，请在临时副本中运行。
 
 ## 贡献者
 

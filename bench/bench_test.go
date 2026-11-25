@@ -86,13 +86,17 @@ func BenchmarkUpdate_Reuse_Default(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", u.ID))
 
 	// warm-up to populate cache
-	_, _ = t.Update(&u, where)
+	if n, err := t.Update(&u, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		u.Name = fmt.Sprintf("alice-%d", i)
 		u.Age = 20 + i&3
-		_, _ = t.Update(&u, where)
+		if n, err := t.Update(&u, where); err != nil || n != 1 {
+			bm.Fatalf("Update: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -106,13 +110,17 @@ func BenchmarkUpdate_Reuse_SameShape(bm *testing.B) {
 	fields := zorm.Fields("name", "age")
 
 	// warm-up
-	_, _ = t.Update(&u, fields, where)
+	if n, err := t.Update(&u, fields, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		u.Name = fmt.Sprintf("alice-%d", i)
 		u.Age = 20 + i&3
-		_, _ = t.Update(&u, fields, where)
+		if n, err := t.Update(&u, fields, where); err != nil || n != 1 {
+			bm.Fatalf("Update: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -127,17 +135,25 @@ func BenchmarkUpdate_Reuse_ShapeChanges(bm *testing.B) {
 	fieldsB := zorm.Fields("name", "age")
 
 	// warm-up both shapes
-	_, _ = t.Update(&u, fieldsA, where)
-	_, _ = t.Update(&u, fieldsB, where)
+	if n, err := t.Update(&u, fieldsA, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
+	if n, err := t.Update(&u, fieldsB, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		u.Name = fmt.Sprintf("alice-%d", i)
 		u.Age = 20 + i&3
 		if i&1 == 0 {
-			_, _ = t.Update(&u, fieldsA, where)
+			if n, err := t.Update(&u, fieldsA, where); err != nil || n != 1 {
+				bm.Fatalf("Update: rows=%d err=%v", n, err)
+			}
 		} else {
-			_, _ = t.Update(&u, fieldsB, where)
+			if n, err := t.Update(&u, fieldsB, where); err != nil || n != 1 {
+				bm.Fatalf("Update: rows=%d err=%v", n, err)
+			}
 		}
 	}
 }
@@ -148,13 +164,17 @@ func BenchmarkInsert_Reuse_Default(bm *testing.B) {
 	t := zorm.Table(db, "users")
 	u := benchInsertUser{Name: "alice", Age: 20}
 
-	_, _ = t.Insert(&u)
+	if n, err := t.Insert(&u); err != nil || n != 1 {
+		bm.Fatalf("Insert: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		u.Name = fmt.Sprintf("alice-%d", i)
 		u.Age = 20 + i&3
-		_, _ = t.Insert(&u)
+		if n, err := t.Insert(&u); err != nil || n != 1 {
+			bm.Fatalf("Insert: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -165,13 +185,17 @@ func BenchmarkInsert_Reuse_WithFields(bm *testing.B) {
 	u := benchInsertUser{Name: "alice", Age: 20}
 	fields := zorm.Fields("name", "age")
 
-	_, _ = t.Insert(&u, fields)
+	if n, err := t.Insert(&u, fields); err != nil || n != 1 {
+		bm.Fatalf("Insert: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		u.Name = fmt.Sprintf("alice-%d", i)
 		u.Age = 20 + i&3
-		_, _ = t.Insert(&u, fields)
+		if n, err := t.Insert(&u, fields); err != nil || n != 1 {
+			bm.Fatalf("Insert: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -182,13 +206,17 @@ func BenchmarkUpdateMap_Reuse_SameShape(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", 1))
 	update := zorm.V{"name": "alice", "age": 20}
 
-	_, _ = t.Update(update, where)
+	if n, err := t.Update(update, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		update["name"] = fmt.Sprintf("alice-%d", i)
 		update["age"] = 20 + i&3
-		_, _ = t.Update(update, where)
+		if n, err := t.Update(update, where); err != nil || n != 1 {
+			bm.Fatalf("Update: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -200,17 +228,25 @@ func BenchmarkUpdateMap_Reuse_ShapeChanges(bm *testing.B) {
 	updateA := zorm.V{"name": "alice"}
 	updateB := zorm.V{"age": 20}
 
-	_, _ = t.Update(updateA, where)
-	_, _ = t.Update(updateB, where)
+	if n, err := t.Update(updateA, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
+	if n, err := t.Update(updateB, where); err != nil || n != 1 {
+		bm.Fatalf("Update: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		if i&1 == 0 {
 			updateA["name"] = fmt.Sprintf("alice-%d", i)
-			_, _ = t.Update(updateA, where)
+			if n, err := t.Update(updateA, where); err != nil || n != 1 {
+				bm.Fatalf("Update: rows=%d err=%v", n, err)
+			}
 		} else {
 			updateB["age"] = 20 + i&3
-			_, _ = t.Update(updateB, where)
+			if n, err := t.Update(updateB, where); err != nil || n != 1 {
+				bm.Fatalf("Update: rows=%d err=%v", n, err)
+			}
 		}
 	}
 }
@@ -222,12 +258,16 @@ func BenchmarkSelect_Reuse_SameShape(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", 1))
 
 	var warm benchSelectUser
-	_, _ = t.Select(&warm, where)
+	if n, err := t.Select(&warm, where); err != nil || n != 1 {
+		bm.Fatalf("Select: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		var user benchSelectUser
-		_, _ = t.Select(&user, where)
+		if n, err := t.Select(&user, where); err != nil || n != 1 {
+			bm.Fatalf("Select: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -239,12 +279,16 @@ func BenchmarkSelect_Reuse_WithFields(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", 1))
 
 	var warm benchSelectUser
-	_, _ = t.Select(&warm, fields, where)
+	if n, err := t.Select(&warm, fields, where); err != nil || n != 1 {
+		bm.Fatalf("Select: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		var user benchSelectUser
-		_, _ = t.Select(&user, fields, where)
+		if n, err := t.Select(&user, fields, where); err != nil || n != 1 {
+			bm.Fatalf("Select: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -255,12 +299,16 @@ func BenchmarkSelectMap_Reuse_Wildcard(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", 1))
 
 	var warm map[string]interface{}
-	_, _ = t.Select(&warm, where)
+	if n, err := t.Select(&warm, where); err != nil || n != 1 {
+		bm.Fatalf("Select: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		var row map[string]interface{}
-		_, _ = t.Select(&row, where)
+		if n, err := t.Select(&row, where); err != nil || n != 1 {
+			bm.Fatalf("Select: rows=%d err=%v", n, err)
+		}
 	}
 }
 
@@ -272,11 +320,67 @@ func BenchmarkSelectMap_Reuse_WithFields(bm *testing.B) {
 	where := zorm.Where(zorm.Eq("id", 1))
 
 	var warm map[string]interface{}
-	_, _ = t.Select(&warm, fields, where)
+	if n, err := t.Select(&warm, fields, where); err != nil || n != 1 {
+		bm.Fatalf("Select: rows=%d err=%v", n, err)
+	}
 
 	bm.ResetTimer()
 	for i := 0; i < bm.N; i++ {
 		var row map[string]interface{}
-		_, _ = t.Select(&row, fields, where)
+		if n, err := t.Select(&row, fields, where); err != nil || n != 1 {
+			bm.Fatalf("Select: rows=%d err=%v", n, err)
+		}
+	}
+}
+
+// Keep formatting and database I/O out of the cache-layout comparison.
+func BenchmarkUpdate_Reuse_Parallel(bm *testing.B) {
+	for _, shared := range []bool{true, false} {
+		name := "IndependentTables"
+		if shared {
+			name = "SharedTable"
+		}
+		bm.Run(name, func(bm *testing.B) {
+			tbl := zorm.Table(benchDB{}, "users")
+			bm.ReportAllocs()
+			bm.RunParallel(func(pb *testing.PB) {
+				workerTable := tbl
+				if !shared {
+					workerTable = zorm.Table(benchDB{}, "users")
+				}
+				u := benchUser{ID: 1, Name: "alice", Age: 20}
+				args := []zorm.ZormItem{zorm.Fields("name", "age"), zorm.Where(zorm.Eq("id", u.ID))}
+				for pb.Next() {
+					if n, err := workerTable.Update(&u, args...); err != nil || n != 1 {
+						bm.Fatalf("Update: rows=%d err=%v", n, err)
+					}
+				}
+			})
+		})
+	}
+}
+
+func BenchmarkUpdate_Reuse_NewTable(bm *testing.B) {
+	db := benchDB{}
+	u := benchUser{ID: 1, Name: "alice", Age: 20}
+	args := []zorm.ZormItem{zorm.Fields("name", "age"), zorm.Where(zorm.Eq("id", u.ID))}
+	bm.ReportAllocs()
+	for i := 0; i < bm.N; i++ {
+		if n, err := zorm.Table(db, "users").Update(&u, args...); err != nil || n != 1 {
+			bm.Fatalf("Update: rows=%d err=%v", n, err)
+		}
+	}
+}
+
+func BenchmarkUpdate_Reuse_NewTable_AlternatingTables(bm *testing.B) {
+	db := benchDB{}
+	u := benchUser{ID: 1, Name: "alice", Age: 20}
+	args := []zorm.ZormItem{zorm.Fields("name", "age"), zorm.Where(zorm.Eq("id", u.ID))}
+	names := [...]string{"users_a", "users_b"}
+	bm.ReportAllocs()
+	for i := 0; i < bm.N; i++ {
+		if n, err := zorm.Table(db, names[i&1]).Update(&u, args...); err != nil || n != 1 {
+			bm.Fatalf("Update: rows=%d err=%v", n, err)
+		}
 	}
 }
